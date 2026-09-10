@@ -55,6 +55,48 @@ def _machine_identity_score(org_id: str) -> float:
     return round(max(0.0, 100.0 - penalty), 2)
 
 
+def _signals(org_id: str) -> dict:
+    """The raw, human-readable inputs behind each module sub-score."""
+    usage = ai_monitor.usage_summary(org_id, days=30)
+    debt = debt_reporting.summary(org_id)
+    components = sc_alerts.list_components(org_id)
+    reg = identity_registry.list_registry(org_id)
+    fraud_open = fraud_risk_scoring.list_alerts(org_id, status="open")
+
+    return {
+        "ai_governance": {
+            "calls_30d": usage["calls"],
+            "blocked_calls": usage["blocked_calls"],
+            "blocked_pct": round(
+                (usage["blocked_calls"] / usage["calls"] * 100) if usage["calls"] else 0.0, 1
+            ),
+            "avg_interaction_risk": usage["avg_risk_score"],
+        },
+        "security_debt": {
+            "critical": debt["by_severity"].get("critical", 0),
+            "high": debt["by_severity"].get("high", 0),
+            "total_findings": debt["total_findings"],
+        },
+        "supply_chain": {
+            "components": len(components),
+            "critical_cves": sum(1 for c in components if c["max_cvss"] >= 9.0),
+            "vulnerable_components": sum(1 for c in components if c["cve_count"] > 0),
+        },
+        "machine_identity": {
+            "total": len(reg),
+            "expired_or_revoked": sum(1 for r in reg if r["status"] in ("expired", "revoked")),
+            "expired_pct": round(
+                (sum(1 for r in reg if r["status"] in ("expired", "revoked")) / len(reg) * 100)
+                if reg else 0.0, 1
+            ),
+        },
+        "fraud_detection": {
+            "open_alerts": len(fraud_open),
+            "high_risk_alerts": sum(1 for a in fraud_open if a["risk_score"] >= 70),
+        },
+    }
+
+
 def calculate(org_id: str, *, persist: bool = True) -> dict:
     breakdown = {
         "ai_governance": _ai_governance_score(org_id),
@@ -71,6 +113,7 @@ def calculate(org_id: str, *, persist: bool = True) -> dict:
         "overall": overall,
         "grade": grade,
         "breakdown": breakdown,
+        "signals": _signals(org_id),
         "weights": WEIGHTS,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

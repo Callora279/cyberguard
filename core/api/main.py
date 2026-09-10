@@ -17,12 +17,15 @@ from core.api.routes import (
     fraud_detection,
     health,
     machine_identity,
+    onboarding,
     risk_score,
     security_debt,
+    settings as settings_routes,
     supply_chain,
     users,
 )
 from core.database.db import init_db
+from core.database.migrate import run_migrations
 from core.services.ai_governance.real_time_enforcer import install as install_enforcer
 from core.utils.config import settings
 from core.utils.exceptions import CyberGuardError
@@ -35,6 +38,7 @@ logger = get_logger("api.main")
 async def lifespan(app: FastAPI):
     configure_logging()
     init_db()
+    run_migrations()  # patch in any columns missing from an older production DB
     install_enforcer()  # route all AI calls through governance
     logger.info("%s %s started (env=%s)", settings.APP_NAME, settings.VERSION, settings.ENV)
     yield
@@ -87,6 +91,8 @@ app.include_router(fraud_detection.router, prefix=f"{API}/fraud-detection", tags
 # risk-score + predictive-risk, cyber-twin and the Chakra internal endpoint
 app.include_router(risk_score.router, prefix=f"{API}/risk-score", tags=["risk-score"])
 app.include_router(cyber_twin.router, prefix=f"{API}/cyber-twin", tags=["cyber-twin"])
+app.include_router(onboarding.router, prefix=f"{API}/onboarding", tags=["onboarding"])
+app.include_router(settings_routes.router, prefix=f"{API}/settings", tags=["settings"])
 app.include_router(health.internal_router, prefix="/internal", tags=["internal"])
 
 

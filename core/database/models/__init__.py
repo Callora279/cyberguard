@@ -37,11 +37,65 @@ class Organisation(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    plan: Mapped[str] = mapped_column(String(32), default="free")
+    plan: Mapped[str] = mapped_column(String(32), default="trial")  # trial|free|pro|enterprise
+    license_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     chakra_org_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     users: Mapped[list["User"]] = relationship(back_populates="org", cascade="all, delete-orphan")
+    settings: Mapped["OrgSettings"] = relationship(
+        back_populates="org", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class OrgSettings(Base):
+    """One row per organisation: onboarding progress + integration config."""
+
+    __tablename__ = "org_settings"
+
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), primary_key=True)
+
+    # onboarding
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    onboarding_step: Mapped[int] = mapped_column(Integer, default=1)  # 1..4
+    scan_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # step 1 — GitHub
+    github_repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    github_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_connected: Mapped[bool] = mapped_column(Boolean, default=False)
+    github_last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # step 2 — website
+    website_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    website_last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    website_last_result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # step 4 — alerts
+    slack_webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    report_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    alert_threshold: Mapped[str] = mapped_column(String(16), default="high")  # critical|high|medium|low
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    org: Mapped[Organisation] = relationship(back_populates="settings")
+
+
+class ApiToken(Base):
+    """Long-lived tokens for CLI / CI access (only the hash is stored)."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_by: Mapped[str] = mapped_column(String(36))
+    name: Mapped[str] = mapped_column(String(128))
+    prefix: Mapped[str] = mapped_column(String(16), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class User(Base):
@@ -189,6 +243,8 @@ class Alert(Base):
 
 __all__ = [
     "Organisation",
+    "OrgSettings",
+    "ApiToken",
     "User",
     "AIInteraction",
     "AIPolicy",

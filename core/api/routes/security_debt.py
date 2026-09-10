@@ -20,6 +20,8 @@ _DEFAULT_PATH = os.getenv("SCAN_TARGET_PATH", ".")
 
 class ScanIn(BaseModel):
     path: str | None = None
+    repo_url: str | None = None
+    github_token: str | None = None
     include_dependencies: bool = True
 
 
@@ -47,6 +49,13 @@ def get_scan(principal: Principal = Depends(get_principal)) -> dict:
 
 @router.post("/scan")
 def run_scan(body: ScanIn, principal: Principal = Depends(get_principal)) -> dict:
+    if body.repo_url:
+        return reporting.run_scan_github(
+            principal.org_id,
+            body.repo_url,
+            token=body.github_token,
+            include_dependencies=body.include_dependencies,
+        )
     path = body.path or _DEFAULT_PATH
     if not os.path.isdir(path):
         raise ValidationError(f"path not found: {path}")

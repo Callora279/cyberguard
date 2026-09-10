@@ -4,7 +4,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from core.database.db import init_db, session_scope
-from core.database.models import AIPolicy, Organisation, User
+from core.database.models import AIPolicy, OrgSettings, Organisation, User
 from core.utils.config import settings
 from core.utils.crypto import hash_password
 
@@ -22,6 +22,15 @@ def seed() -> str:
             )
             db.add(org)
             db.flush()
+        if not db.get(OrgSettings, org.id):
+            db.add(
+                OrgSettings(
+                    org_id=org.id,
+                    onboarding_completed=True,
+                    onboarding_step=4,
+                    alert_threshold="high",
+                )
+            )
         if not db.scalar(select(User).where(User.email == DEMO_EMAIL)):
             db.add(
                 User(

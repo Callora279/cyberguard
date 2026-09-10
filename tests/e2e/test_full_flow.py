@@ -1,16 +1,13 @@
 """End-to-end: scan -> findings -> unified score -> forecast -> alert ack."""
 from __future__ import annotations
 
-# Regex-compatible dummy (not a real key) used to seed the scanner test fixture.
-DUMMY_GROQ_KEY = "gsk_TESTDUMMYKEYFORTESTINGONLYAAAA0000"
 
-
-def test_full_platform_flow(client, auth_headers, tmp_path):
+def test_full_platform_flow(client, auth_headers, tmp_path, mock_secret_token, fraud_test_vectors):
     # 1. a small vulnerable project
     (tmp_path / "requirements.txt").write_text("flask==0.12.2\n")
     (tmp_path / "svc.py").write_text(
         "import os\n"
-        f"SECRET = '{DUMMY_GROQ_KEY}'\n"
+        f"SECRET = '{mock_secret_token}'\n"
         "os.system('echo ' + input())\n"
     )
 
@@ -42,7 +39,10 @@ def test_full_platform_flow(client, auth_headers, tmp_path):
         headers=auth_headers,
         json={
             "subject": "e2e-case",
-            "identity": {"email": "e2e99@mailinator.com", "phone": "0000000000"},
+            "identity": {
+                "email": fraud_test_vectors["disposable_email"],
+                "phone": fraud_test_vectors["placeholder_phone"],
+            },
             "transaction": {"amount": 75000, "account_avg": 2000, "new_beneficiary": True},
             "context": {"ip_country": "RU", "billing_country": "GB", "device_change": True},
         },

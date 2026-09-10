@@ -9,16 +9,42 @@ from core.database.db import session_scope
 from core.database.models import FraudAlert
 from core.utils.timeutil import as_aware
 
+# Safe default returned when there is nothing to correlate (missing/empty case).
+_SAFE_DEFAULT = {
+    "boost": 0.0,
+    "signals": [],
+    "related_alert_count": 0,
+    "ring_suspected": False,
+}
 
-def correlate(org_id: str, case: dict, base_assessment: dict) -> dict:
-    """Look for links between this case and recent fraud alerts."""
+
+def _as_dict(value: object) -> dict:
+    """Coerce ``None`` / non-dict values to an empty dict so ``.get()`` is safe."""
+    return value if isinstance(value, dict) else {}
+
+
+def correlate(org_id: str, case: dict | None, base_assessment: dict | None = None) -> dict:
+    """Look for links between this case and recent fraud alerts.
+
+    Every field of ``case`` is optional and may be ``None``; this function never
+    raises on missing or null input — it returns :data:`_SAFE_DEFAULT` instead.
+    """
+    case = _as_dict(case)
+    base_assessment = _as_dict(base_assessment)
+    if not case or not org_id:
+        return dict(_SAFE_DEFAULT)
+
     since = datetime.now(timezone.utc) - timedelta(days=30)
     signals: list[str] = []
     boost = 0.0
 
-    subject = str(case.get("subject") or case.get("identity", {}).get("email", "")).lower()
-    ip = case.get("context", {}).get("ip")
-    iban = case.get("invoice", {}).get("iban") if case.get("invoice") else None
+    identity = _as_dict(case.get("identity"))
+    context = _as_dict(case.get("context"))
+    invoice = _as_dict(case.get("invoice"))
+
+    subject = str(case.get("subject") or identity.get("email") or "").lower()
+    ip = context.get("ip")
+    iban = invoice.get("iban")
 
     with session_scope() as db:
         recent = db.scalars(

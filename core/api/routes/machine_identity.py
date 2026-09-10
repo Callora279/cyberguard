@@ -83,6 +83,8 @@ def rotate_due(principal: Principal = Depends(get_principal)) -> dict:
 @router.get("/alerts")
 def alerts(principal: Principal = Depends(get_principal)) -> dict:
     expiry = identity_registry.check_expiries(principal.org_id)
+    expiring_soon = credential_rotation.notify_expiring(principal.org_id, within_days=30)
+    stale = behaviour_monitor.check_stale(principal.org_id, days=30)
     with session_scope() as db:
         rows = db.scalars(
             select(Alert)
@@ -94,7 +96,12 @@ def alerts(principal: Principal = Depends(get_principal)) -> dict:
             {"id": a.id, "severity": a.severity, "title": a.title, "body": a.body, "created_at": a.created_at}
             for a in rows
         ]
-    return {"expiry_sweep": expiry, "alerts": feed}
+    return {
+        "expiry_sweep": expiry,
+        "expiring_within_30d": expiring_soon["expiring"],
+        "stale_credentials": stale["stale"],
+        "alerts": feed,
+    }
 
 
 @router.get("/history")

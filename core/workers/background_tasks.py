@@ -37,6 +37,22 @@ def rotate_due_credentials(org_id: str) -> dict:
     return credential_rotation.rotate_due(org_id)
 
 
+@task("cyberguard.daily_identity_sweep")
+def daily_identity_sweep(org_id: str) -> dict:
+    """Runs daily at midnight: expiry, <30-day expiry notice, staleness."""
+    from core.services.machine_identity import behaviour_monitor
+
+    expiry = identity_registry.check_expiries(org_id)
+    expiring = credential_rotation.notify_expiring(org_id, within_days=30)
+    stale = behaviour_monitor.check_stale(org_id, days=30)
+    return {
+        "org_id": org_id,
+        "expired": len(expiry["expired"]),
+        "expiring_soon": len(expiring["expiring"]),
+        "stale": len(stale["stale"]),
+    }
+
+
 @task("cyberguard.refresh_fingerprint")
 def refresh_fingerprint(org_id: str) -> dict:
     fp = fingerprint_generator.generate(org_id)

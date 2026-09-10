@@ -39,6 +39,8 @@ _INSECURE_FUNCS = {
         (r"\beval\s*\(", "use of eval()"),
         (r"\bexec\s*\(", "use of exec()"),
         (r"pickle\.loads?\s*\(", "insecure deserialization via pickle"),
+        (r"\bos\.system\s*\(", "use of os.system()"),
+        (r"\bos\.popen\s*\(", "use of os.popen()"),
         (r"hashlib\.md5\s*\(", "weak hash MD5"),
         (r"hashlib\.sha1\s*\(", "weak hash SHA1"),
         (r"subprocess\.(?:call|run|Popen)\([^)]*shell\s*=\s*True", "shell=True command injection risk"),
@@ -64,6 +66,21 @@ _OWASP_PATTERNS = [
 
 _DEBT_MARKERS = re.compile(r"\b(TODO|FIXME|HACK|XXX|BUG)\b")
 
+# Fix guidance keyed by finding type (falls back to a generic message).
+_RECOMMENDATIONS = {
+    "secret": "Remove the hardcoded credential, rotate it immediately, and load it "
+    "from an environment variable or secret manager.",
+    "insecure_fn": "Replace the dangerous call with a safe alternative "
+    "(e.g. subprocess with a list argv and shell=False, json/yaml.safe_load, "
+    "hashlib.sha256) and validate all inputs.",
+    "owasp": "Use parameterised queries / an ORM, enforce HTTPS, and restrict "
+    "CORS to an explicit origin allowlist.",
+    "dependency": "Upgrade the affected package to the fixed version and "
+    "regenerate the SBOM.",
+    "debt": "Schedule refactoring for this hotspot and break the file into "
+    "smaller, tested units.",
+}
+
 
 @dataclass
 class Finding:
@@ -73,10 +90,22 @@ class Finding:
     line: int
     severity: str
     snippet: str = ""
+    description: str = ""
+    recommendation: str = ""
     metadata: dict = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.description:
+            self.description = self.title
+        if not self.recommendation:
+            self.recommendation = _RECOMMENDATIONS.get(
+                self.type, "Review this finding and remediate per your secure-coding standard."
+            )
+
     def as_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["code_snippet"] = d["snippet"]  # spec alias
+        return d
 
 
 def _shannon_entropy(s: str) -> float:
@@ -181,6 +210,34 @@ def scan_path(root: str | Path) -> list[Finding]:
 
 def _redact(line: str) -> str:
     return re.sub(r"(['\"])[^'\"]{6,}(['\"])", r"\1***REDACTED***\2", line).strip()[:200]
+
+
+def scan_github_repo(
+    repo_url: str, *, token: str | None = None, include_dependencies: bool = True
+) -> dict:
+    """Clone a GitHub repo to a temp dir, scan it, and return findings + heatmap."""
+    import tempfile
+
+    from core.services.security_debt.heatmap_engine import heatmap_builder
+    from core.utils.github import download_repo, parse_repo_url
+
+    repo = parse_repo_url(repo_url)
+    with tempfile.TemporaryDirectory(prefix="cg-debt-") as tmp:
+        scan_root = download_repo(repo, token, Path(tmp))
+        findings = [f.as_dict() for f in scan_path(scan_root)]
+        if include_dependencies:
+            findings += [f.as_dict() for f in scan_dependencies(scan_root)]
+
+    by_sev: dict[str, int] = {}
+    for f in findings:
+        by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
+    return {
+        "repo": repo,
+        "total_findings": len(findings),
+        "by_severity": by_sev,
+        "findings": findings,
+        "heatmap": heatmap_builder.build(findings),
+    }
 
 
 def scan_dependencies(root: str | Path) -> list[Finding]:

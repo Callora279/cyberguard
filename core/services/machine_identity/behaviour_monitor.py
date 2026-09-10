@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from sqlalchemy import select
+
 from core.database.db import session_scope
-from core.database.models import Alert
+from core.database.models import Alert, MachineIdentity
 from core.utils.logger import get_logger
+from core.utils.notify import send_alert
+from core.utils.timeutil import as_aware
 
 logger = get_logger("machine_identity.behaviour")
 
@@ -94,6 +98,61 @@ def observe(event: dict) -> dict:
                 )
             )
     return assessment
+
+
+def check_stale(org_id: str, *, days: int = 30) -> dict:
+    """Alert on credentials not used for ``days`` or more (or never used)."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    stale: list[dict] = []
+    with session_scope() as db:
+        rows = db.scalars(
+            select(MachineIdentity).where(
+                MachineIdentity.org_id == org_id,
+                MachineIdentity.status.notin_(("revoked", "expired")),
+            )
+        ).all()
+        for r in rows:
+            last = as_aware(r.last_used)
+            created = as_aware(r.created_at) or now
+            if last is None and created < cutoff:
+                stale.append({"id": r.id, "name": r.name, "type": r.type, "last_used": None})
+            elif last is not None and last < cutoff:
+                stale.append(
+                    {"id": r.id, "name": r.name, "type": r.type,
+                     "last_used": last.isoformat(), "idle_days": (now - last).days}
+                )
+
+    if stale:
+        send_alert(
+            org_id,
+            module="machine_identity",
+            severity="medium",
+            title=f"{len(stale)} credential(s) unused for {days}+ days",
+            body="; ".join(s["name"] for s in stale[:8]),
+            context={"stale": stale, "threshold_days": days},
+        )
+    return {"threshold_days": days, "stale": stale}
+
+
+def usage_spike(identity_id: str, *, requests_last_hour: int, org_id: str = "unknown") -> dict:
+    """Compare this hour's request volume against the identity's hourly baseline."""
+    profile = _load(identity_id)
+    hourly = [c for c in profile.get("hours", {}).values()]
+    if len(hourly) < 3:
+        return {"spike": False, "reason": "insufficient baseline"}
+    baseline = sum(hourly) / len(hourly)
+    spike = requests_last_hour > max(20, baseline * 5)
+    if spike:
+        send_alert(
+            org_id,
+            module="machine_identity",
+            severity="high",
+            title=f"Usage spike for identity {identity_id}",
+            body=f"{requests_last_hour} requests in the last hour vs baseline ~{baseline:.0f}/hr",
+            context={"identity_id": identity_id, "requests_last_hour": requests_last_hour, "baseline": baseline},
+        )
+    return {"spike": spike, "requests_last_hour": requests_last_hour, "baseline_per_hour": round(baseline, 1)}
 
 
 def profile_summary(identity_id: str) -> dict:

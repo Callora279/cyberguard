@@ -20,14 +20,10 @@ def test_policy_blocks_disallowed_model(org_id):
     assert any("allowed list" in v for v in decision.violations)
 
 
-# Regex-compatible dummy (not a real key) used to exercise the secret classifier.
-DUMMY_GROQ_KEY = "gsk_TESTDUMMYKEYFORTESTINGONLYAAAA0000"
-
-
-def test_policy_blocks_secret_in_prompt(org_id):
+def test_policy_blocks_secret_in_prompt(org_id, mock_secret_token):
     decision = policy_engine.evaluate(
         org_id,
-        prompt=f"here is my key {DUMMY_GROQ_KEY}",
+        prompt=f"here is my key {mock_secret_token}",
         model="qwen/qwen3.8-27b",
         max_tokens=100,
     )

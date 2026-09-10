@@ -106,4 +106,6 @@ def proxy_chat(body: ProxyChatIn, principal: Principal = Depends(get_principal))
         "tokens": record.total_tokens,
         "cost_usd": record.cost_usd,
         "latency_ms": record.latency_ms,
+        "policy_decision": record.metadata.get("policy_decision", "allow"),
+        "risk_score": record.metadata.get("risk_score"),
     }

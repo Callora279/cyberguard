@@ -3,9 +3,6 @@ from __future__ import annotations
 
 from core.utils.config import settings
 
-# Regex-compatible dummy that trips the secret scanner without being a real key.
-DUMMY_GROQ_KEY = "gsk_TESTDUMMYKEYFORTESTINGONLYAAAA0000"
-
 
 def test_health(client):
     res = client.get("/api/health")
@@ -17,20 +14,24 @@ def test_auth_required(client):
     assert client.get("/api/risk-score/current").status_code == 401
 
 
-def test_register_and_login(client):
+def test_register_and_login(client, mock_credentials):
     r = client.post(
         "/api/auth/register",
-        json={"email": "int-test@example.com", "password": "supersecret", "org_name": "IntTest"},
+        json={
+            "email": mock_credentials["email"],
+            "password": mock_credentials["password"],
+            "org_name": mock_credentials["org_name"],
+        },
     )
     assert r.status_code == 200
     token = r.json()["access_token"]
     me = client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
-    assert me.json()["email"] == "int-test@example.com"
+    assert me.json()["email"] == mock_credentials["email"]
 
 
-def test_security_debt_scan_flow(client, auth_headers, tmp_path):
+def test_security_debt_scan_flow(client, auth_headers, tmp_path, mock_secret_token):
     (tmp_path / "app.py").write_text(
-        f"API_KEY = '{DUMMY_GROQ_KEY}'\nimport pickle\npickle.loads(b'')\n"
+        f"API_KEY = '{mock_secret_token}'\nimport pickle\npickle.loads(b'')\n"
     )
     res = client.post(
         "/api/security-debt/scan",

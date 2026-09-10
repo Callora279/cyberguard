@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -12,6 +13,22 @@ from core.services.security_debt import prioritizer, scanner
 from core.utils.logger import get_logger
 
 logger = get_logger("security_debt.reporting")
+
+
+def run_scan_github(
+    org_id: str, repo_url: str, *, token: str | None = None, include_dependencies: bool = True
+) -> dict:
+    """Download a GitHub repo to a temp dir and run the normal scan pipeline."""
+    import tempfile
+
+    from core.utils.github import download_repo, parse_repo_url
+
+    repo = parse_repo_url(repo_url)
+    with tempfile.TemporaryDirectory(prefix="cg-debt-") as tmp:
+        scan_root = str(download_repo(repo, token, Path(tmp)))
+        result = run_scan(org_id, scan_root, include_dependencies=include_dependencies)
+    result["repo"] = repo
+    return result
 
 
 def run_scan(org_id: str, path: str, *, include_dependencies: bool = True) -> dict:
@@ -38,7 +55,7 @@ def run_scan(org_id: str, path: str, *, include_dependencies: bool = True) -> di
                     exploitability=item["exploitability"],
                     business_impact=item["business_impact"],
                     fix_effort=item["fix_effort"],
-                    remediation=item.get("rank_reason", ""),
+                    remediation=item.get("recommendation") or item.get("rank_reason", ""),
                 )
             )
         crit = [i for i in backlog if i["severity"] == "critical"]

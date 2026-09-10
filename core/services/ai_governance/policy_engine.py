@@ -53,12 +53,18 @@ class ResolvedPolicy:
     block_on_violation: bool
 
 
+# Spec-mandated built-in default, used when an org has no enabled policy row.
 _DEFAULT = ResolvedPolicy(
     id="default",
     name="Built-in default",
-    max_tokens=4096,
+    max_tokens=4000,
     allowed_models=["qwen/qwen3.8-27b"],
-    prohibited_patterns=[r"ignore (all|previous) instructions"],
+    prohibited_patterns=[
+        r"\bpassword\b",
+        r"\bsecret\b",
+        r"\bapi[_ -]?key\b",
+        r"ignore (all|previous) instructions",
+    ],
     data_classification_rules={"secret": "block", "pii": "flag"},
     block_on_violation=True,
 )

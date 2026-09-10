@@ -5,16 +5,40 @@ from fastapi import APIRouter, Depends, Query
 
 from core.api.middleware.auth import Principal, get_principal
 from core.services.predictive_risk import predictor, risk_forecast, trend_analyzer
-from core.services.unified_risk_score import score_calculator, score_dashboard, score_model
+from core.services.unified_risk_score import (
+    score_calculator,
+    score_dashboard,
+    score_insight,
+    score_model,
+)
 
 router = APIRouter()
 
 
 @router.get("/current")
-def current(recalculate: bool = True, principal: Principal = Depends(get_principal)) -> dict:
-    if recalculate:
-        return score_calculator.calculate(principal.org_id)
-    return score_dashboard.build(principal.org_id, recalculate=False)
+def current(
+    recalculate: bool = True,
+    insight: bool = False,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    result = (
+        score_calculator.calculate(principal.org_id)
+        if recalculate
+        else score_dashboard.build(principal.org_id, recalculate=False)
+    )
+    if insight:
+        result["insight"] = score_insight.generate(result, org_id=principal.org_id)
+    return result
+
+
+@router.get("/insight")
+def insight(principal: Principal = Depends(get_principal)) -> dict:
+    result = score_calculator.calculate(principal.org_id)
+    return {
+        "overall": result["overall"],
+        "grade": result["grade"],
+        "insight": score_insight.generate(result, org_id=principal.org_id),
+    }
 
 
 @router.get("/dashboard")

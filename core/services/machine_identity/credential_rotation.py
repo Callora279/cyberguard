@@ -12,6 +12,8 @@ from core.database.db import session_scope
 from core.database.models import Alert, MachineIdentity
 from core.utils.crypto import new_secret, sha256_hex
 from core.utils.logger import get_logger
+from core.utils.notify import send_alert
+from core.utils.timeutil import as_aware
 
 logger = get_logger("machine_identity.rotation")
 
@@ -102,6 +104,38 @@ def rotate_due(org_id: str, *, max_age_days: int = 90) -> dict:
                 )
             )
     return {"rotated": len(rotated), "failed": failed}
+
+
+def notify_expiring(org_id: str, *, within_days: int = 30) -> dict:
+    """Alert (DB + Slack + email) on credentials expiring within ``within_days``."""
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(days=within_days)
+    expiring: list[dict] = []
+    with session_scope() as db:
+        rows = db.scalars(
+            select(MachineIdentity).where(
+                MachineIdentity.org_id == org_id,
+                MachineIdentity.expires_at.is_not(None),
+                MachineIdentity.status != "revoked",
+            )
+        ).all()
+        for r in rows:
+            exp = as_aware(r.expires_at)
+            if exp and now < exp <= horizon:
+                days_left = (exp - now).days
+                expiring.append({"id": r.id, "name": r.name, "type": r.type, "days_left": days_left})
+
+    if expiring:
+        soonest = min(expiring, key=lambda e: e["days_left"])
+        send_alert(
+            org_id,
+            module="machine_identity",
+            severity="high" if soonest["days_left"] <= 7 else "medium",
+            title=f"{len(expiring)} credential(s) expiring within {within_days} days",
+            body="; ".join(f"{e['name']} in {e['days_left']}d" for e in expiring[:8]),
+            context={"expiring": expiring},
+        )
+    return {"within_days": within_days, "expiring": expiring}
 
 
 def history(identity_id: str | None = None, *, limit: int = 100) -> list[dict]:

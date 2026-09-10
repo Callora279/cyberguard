@@ -33,6 +33,12 @@ class Settings:
     CHAKRA_ORG_ID: str = os.getenv("CHAKRA_ORG_ID", "")
     INTERNAL_SYNC_SECRET: str = os.getenv("INTERNAL_SYNC_SECRET", "")
 
+    # Outbound email for alert notifications (optional; alerts still hit the DB
+    # and Slack without it)
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "alerts@cyberguard.ai")
+
     # LiveGuard integration
     LIVEGUARD_URL: str = os.getenv(
         "LIVEGUARD_URL", "https://liveguard.goiratech.com/api/errors"

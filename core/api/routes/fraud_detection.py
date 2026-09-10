@@ -8,7 +8,12 @@ from sqlalchemy import select
 from core.api.middleware.auth import Principal, get_principal
 from core.database.db import session_scope
 from core.database.models import FraudAlert
-from core.services.ai_fraud_detection import fraud_risk_scoring
+from core.services.ai_fraud_detection import (
+    deepfake_detector,
+    fraud_risk_scoring,
+    invoice_anomaly,
+    synthetic_identity,
+)
 from core.services.ai_fraud_detection.fusion_engine import fusion_analyzer, fusion_correlator
 from core.utils.exceptions import NotFoundError
 
@@ -18,6 +23,7 @@ router = APIRouter()
 class AnalyzeIn(BaseModel):
     type: str = "fusion"
     subject: str | None = None
+    content: str | None = None  # free-text invoice / payment request / vendor details
     identity: dict | None = None
     transaction: dict = {}
     invoice: dict | None = None
@@ -30,8 +36,27 @@ class StatusIn(BaseModel):
     status: str
 
 
+class DocumentIn(BaseModel):
+    text: str
+
+
+class InvoiceIn(BaseModel):
+    invoice: dict
+    history: list[dict] = []
+
+
+class IdentityIn(BaseModel):
+    identity: dict
+
+
 @router.post("/analyze")
 def analyze(body: AnalyzeIn, principal: Principal = Depends(get_principal)) -> dict:
+    # free-text path: {"type": "invoice", "content": "..."}
+    if body.content:
+        return fraud_risk_scoring.score_content(
+            body.content, doc_type=body.type, org_id=principal.org_id
+        )
+
     case = {
         "case_id": body.subject or "case",
         "org_id": principal.org_id,
@@ -56,6 +81,21 @@ def analyze(body: AnalyzeIn, principal: Principal = Depends(get_principal)) -> d
                 )
             )
     return fused
+
+
+@router.post("/document")
+def document(body: DocumentIn, principal: Principal = Depends(get_principal)) -> dict:
+    return deepfake_detector.detect_falsified_document(body.text, org_id=principal.org_id)
+
+
+@router.post("/invoice")
+def invoice(body: InvoiceIn, principal: Principal = Depends(get_principal)) -> dict:
+    return invoice_anomaly.analyze(body.invoice, body.history)
+
+
+@router.post("/identity")
+def identity(body: IdentityIn, principal: Principal = Depends(get_principal)) -> dict:
+    return synthetic_identity.analyze(body.identity)
 
 
 @router.get("/alerts")

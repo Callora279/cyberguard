@@ -14,7 +14,7 @@ from core.utils.logger import get_logger
 logger = get_logger("machine_identity.registry")
 
 VALID_TYPES = {"api_key", "service_account", "cert", "oauth", "ssh_key"}
-_EXPIRY_WARN_DAYS = 14
+_EXPIRY_WARN_DAYS = 30
 
 
 def register(

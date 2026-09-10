@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.services.ai_governance import monitor, policy_engine
+from core.services.ai_governance import monitor, policy_engine, risk_scoring
 from core.services.ai_governance.ai_behavior_fingerprinting import fingerprint_analyzer
 from core.utils.ai_client import AICallRecord, chat
 from core.utils.config import settings
@@ -18,6 +18,10 @@ from core.utils.exceptions import PolicyViolation
 from core.utils.logger import get_logger
 
 logger = get_logger("ai_governance.enforcer")
+
+# Pre-call block gate: if the normalised prompt-risk (0-1) is at or above this,
+# the request never reaches Groq — it is blocked, alerted and logged.
+RISK_BLOCK_THRESHOLD = 0.8
 
 _installed = False
 
@@ -58,6 +62,18 @@ def guarded_chat(
             details={"violations": decision.violations},
         )
 
+    # Pre-call risk gate — block obviously dangerous prompts (injection +
+    # exfiltration + PII exposure) before they ever reach the model.
+    risk = risk_scoring.prompt_risk(prompt)
+    if risk >= RISK_BLOCK_THRESHOLD:
+        violations = [f"pre-call risk score {risk:.2f} >= {RISK_BLOCK_THRESHOLD}"]
+        logger.warning("blocking org=%s purpose=%s on risk=%.2f", org_id, purpose, risk)
+        _record_blocked(prompt, org_id, model, violations, risk=risk)
+        raise PolicyViolation(
+            "AI request blocked: prompt risk score above threshold",
+            details={"risk_score": risk, "violations": violations},
+        )
+
     record = chat(
         prompt,
         system=system,
@@ -71,13 +87,23 @@ def guarded_chat(
         },
     )
 
+    record.metadata.setdefault("pre_call_risk", risk)
+    record.metadata["risk_score"] = risk_scoring.score_interaction(
+        prompt, record.response
+    ).score
+
     anomaly = fingerprint_analyzer.check(org_id, record)
     if anomaly.get("anomalous"):
         logger.warning("fingerprint anomaly for org=%s: %s", org_id, anomaly["reasons"])
     return record
 
 
-def _record_blocked(prompt: str, org_id: str, model: str, violations: list[str]) -> None:
+def _record_blocked(
+    prompt: str, org_id: str, model: str, violations: list[str], *, risk: float | None = None
+) -> None:
+    meta = {"org_id": org_id, "policy_decision": "block", "violations": violations}
+    if risk is not None:
+        meta["pre_call_risk"] = risk
     fake = AICallRecord(
         model=model,
         prompt=prompt,
@@ -88,7 +114,7 @@ def _record_blocked(prompt: str, org_id: str, model: str, violations: list[str])
         total_tokens=0,
         latency_ms=0.0,
         cost_usd=0.0,
-        metadata={"org_id": org_id, "policy_decision": "block", "violations": violations},
+        metadata=meta,
     )
     try:
         monitor.record_interaction(fake)

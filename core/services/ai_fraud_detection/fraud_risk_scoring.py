@@ -1,6 +1,7 @@
 """Combined fraud risk score across transaction, identity, document and behaviour."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -15,12 +16,43 @@ from core.services.ai_fraud_detection import (
 
 _WEIGHTS = {"transaction": 0.30, "identity": 0.25, "document": 0.25, "behavioural": 0.20}
 
+# text-content combine weights (spec: invoice .35 / identity .25 / deepfake .25 / behavioural .15)
+_CONTENT_WEIGHTS = {"invoice": 0.35, "identity": 0.25, "deepfake": 0.25, "behavioural": 0.15}
 
-def _transaction_risk(txn: dict) -> tuple[float, list[str]]:
+# (regex, friendly label, weight) — social-engineering / process-abuse cues in free text
+_BEHAVIOURAL_PATTERNS: list[tuple[str, str, float]] = [
+    (r"\bbypass(?:ing|ed)?\b", "asks to bypass a control", 0.25),
+    (r"\bskip(?:ping)?\s+(?:the\s+)?(?:approval|process|checks?)\b", "asks to skip approval", 0.25),
+    (r"\boutside\s+(?:the\s+)?normal\s+process\b", "explicitly outside normal process", 0.25),
+    (r"\boverride\b", "requests an override", 0.20),
+    (r"\bceo\b|\bcfo\b|\bchief\s+exec", "invokes executive authority", 0.20),
+    (r"\burgent(?:ly)?\b", "urgency pressure", 0.15),
+    (r"\bimmediat(?:e|ely)\b|\basap\b|\bright\s+away\b", "demands immediate action", 0.15),
+    (r"within\s+\d+\s*(?:hours?|hrs?|business\s+days?)", "artificial deadline", 0.15),
+    (r"\bconfidential(?:ly)?\b|do\s*n['o]?t\s+tell|keep\s+this\s+between", "secrecy request", 0.20),
+    (r"gift\s*cards?|wire\s+transfer|crypto|bitcoin", "unusual payment channel", 0.20),
+    (r"new\s+(?:bank|payment|account)\s+details|chang(?:e|ed|ing)\s+(?:the\s+)?bank", "bank-detail change", 0.25),
+]
+
+
+def _behavioural_content(content: str | None) -> dict:
+    """Score social-engineering / pressure cues in a free-text message (0.0-1.0)."""
+    low = (content or "").lower()
     reasons: list[str] = []
     score = 0.0
-    amount = float(txn.get("amount", 0))
-    if amount > float(txn.get("account_avg", amount) or amount) * 5:
+    for pattern, label, weight in _BEHAVIOURAL_PATTERNS:
+        if re.search(pattern, low):
+            reasons.append(label)
+            score += weight
+    return {"score": min(1.0, round(score, 3)), "reasons": reasons}
+
+
+def _transaction_risk(txn: dict | None) -> tuple[float, list[str]]:
+    txn = txn if isinstance(txn, dict) else {}
+    reasons: list[str] = []
+    score = 0.0
+    amount = float(txn.get("amount", 0) or 0)
+    if amount > float(txn.get("account_avg") or amount or 0) * 5:
         score += 30
         reasons.append("transaction 5x account average")
     if txn.get("cross_border"):
@@ -39,7 +71,8 @@ def _transaction_risk(txn: dict) -> tuple[float, list[str]]:
     return min(100.0, score), reasons
 
 
-def _behavioural_risk(ctx: dict) -> tuple[float, list[str]]:
+def _behavioural_risk(ctx: dict | None) -> tuple[float, list[str]]:
+    ctx = ctx if isinstance(ctx, dict) else {}
     reasons: list[str] = []
     score = 0.0
     if ctx.get("device_change"):
@@ -58,36 +91,51 @@ def _behavioural_risk(ctx: dict) -> tuple[float, list[str]]:
 
 
 def score(
-    payload: dict,
+    payload: dict | None,
     *,
     org_id: str = "unknown",
     history: list[dict] | None = None,
     persist: bool = True,
 ) -> dict:
-    """payload may contain: transaction, identity, document{text,meta}, context."""
+    """payload may contain: transaction, identity, document{text,meta}, context.
+
+    Every sub-field is optional and may be ``None``; a fully empty/None payload
+    scores 0 and returns an ``allow`` verdict rather than raising.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    history = [h for h in (history or []) if isinstance(h, dict)]
     parts: dict[str, dict] = {}
 
-    txn_s, txn_r = _transaction_risk(payload.get("transaction", {}))
+    txn_s, txn_r = _transaction_risk(payload.get("transaction"))
     parts["transaction"] = {"score": txn_s, "reasons": txn_r}
 
-    id_result = synthetic_identity.analyze(payload["identity"]) if payload.get("identity") else {"synthetic_score": 0.0, "reasons": []}
+    identity = payload.get("identity")
+    id_result = (
+        synthetic_identity.analyze(identity)
+        if isinstance(identity, dict) and identity
+        else {"synthetic_score": 0.0, "reasons": []}
+    )
     parts["identity"] = {"score": id_result["synthetic_score"], "reasons": id_result["reasons"]}
 
     doc = payload.get("document")
-    if doc:
+    if isinstance(doc, dict) and doc:
         d = deepfake_detector.score_invoice_document(
-            doc.get("text", ""), doc.get("meta", {}), org_id=org_id
+            doc.get("text") or "", doc.get("meta") or {}, org_id=org_id
         )
-        parts["document"] = {"score": d["document_risk_score"], "reasons": d["text_analysis"]["signals"].get("ai_phrase_markers", [])}
+        parts["document"] = {
+            "score": d["document_risk_score"],
+            "reasons": d["text_analysis"]["signals"].get("ai_phrase_markers", []),
+        }
     else:
         parts["document"] = {"score": 0.0, "reasons": []}
 
-    beh_s, beh_r = _behavioural_risk(payload.get("context", {}))
+    beh_s, beh_r = _behavioural_risk(payload.get("context"))
     parts["behavioural"] = {"score": beh_s, "reasons": beh_r}
 
     # optional invoice anomaly overlay
-    if payload.get("invoice"):
-        inv = invoice_anomaly.analyze(payload["invoice"], history)
+    invoice = payload.get("invoice")
+    if isinstance(invoice, dict) and invoice:
+        inv = invoice_anomaly.analyze(invoice, history)
         parts["document"]["score"] = max(parts["document"]["score"], inv["anomaly_score"])
         parts["document"]["reasons"] += inv["reasons"]
 
@@ -110,6 +158,85 @@ def score(
                     subject=str(payload.get("subject") or payload.get("identity", {}).get("email", "")),
                     risk_score=overall,
                     signals=parts,
+                    status="open",
+                )
+            )
+    return result
+
+
+def score_content(
+    content: str | None,
+    *,
+    doc_type: str = "invoice",
+    org_id: str = "unknown",
+    persist: bool = True,
+) -> dict:
+    """Analyse a free-text document (invoice / payment request / vendor details).
+
+    Runs all four text detectors and combines them on a 0.0-1.0 scale:
+        invoice*0.35 + identity*0.25 + deepfake*0.25 + behavioural*0.15
+    verdict: any component (or the blended score) > 0.9 -> block,
+             > 0.7 (or blended >= 0.5) -> review, else allow.
+    """
+    text = content or ""
+
+    inv = invoice_anomaly.analyze_content(text)
+    ident = synthetic_identity.analyze_content(text)
+    deep = deepfake_detector.analyze_content(text, org_id=org_id)
+    beh = _behavioural_content(text)
+
+    components = {
+        "invoice": float(inv["score"]),
+        "identity": float(ident["score"]),
+        "deepfake": float(deep["fraud_score"]),
+        "behavioural": float(beh["score"]),
+    }
+    fraud_score = round(sum(components[k] * w for k, w in _CONTENT_WEIGHTS.items()), 3)
+    top = max(components.values(), default=0.0)
+
+    if top > 0.9 or fraud_score >= 0.9:
+        verdict = "block"
+    elif top > 0.7 or fraud_score >= 0.5:
+        verdict = "review"
+    else:
+        verdict = "allow"
+
+    reasons = (
+        [f"invoice: {r}" for r in inv["reasons"]]
+        + [f"identity: {r}" for r in ident["reasons"]]
+        + [f"document: {r}" for r in deep["reasons"]]
+        + [f"behaviour: {r}" for r in beh["reasons"]]
+    )
+
+    result = {
+        "type": doc_type,
+        "fraud_score": fraud_score,
+        "is_suspicious": fraud_score >= 0.5,
+        "verdict": verdict,
+        "reasons": reasons,
+        "breakdown": {
+            "invoice": {"score": components["invoice"], "reasons": inv["reasons"]},
+            "identity": {"score": components["identity"], "reasons": ident["reasons"]},
+            "deepfake": {
+                "score": components["deepfake"],
+                "reasons": deep["reasons"],
+                "source": deep.get("source", "groq"),
+            },
+            "behavioural": {"score": components["behavioural"], "reasons": beh["reasons"]},
+        },
+        "weights": _CONTENT_WEIGHTS,
+        "scored_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if persist and fraud_score >= 0.4:
+        with session_scope() as db:
+            db.add(
+                FraudAlert(
+                    org_id=org_id,
+                    type=doc_type or "document",
+                    subject=text.strip().splitlines()[0][:120] if text.strip() else "",
+                    risk_score=round(fraud_score * 100, 1),  # stored on the 0-100 scale
+                    signals=result["breakdown"],
                     status="open",
                 )
             )

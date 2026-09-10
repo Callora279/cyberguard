@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from core.api.middleware.auth import Principal, get_principal
-from core.services.supply_chain import alerts, sbom_parser, vendor_risk
+from core.services.supply_chain import alerts, dependency_scanner, sbom_parser, vendor_risk
 from core.services.supply_chain.ai_generated_sbom import sbom_generator, sbom_updater
 from core.utils.exceptions import ValidationError
 
@@ -23,6 +24,11 @@ class SBOMIn(BaseModel):
     raw: str
 
 
+class ManifestIn(BaseModel):
+    filename: str  # "package.json" | "requirements.txt" | ...
+    content: str
+
+
 class GenerateIn(BaseModel):
     path: str | None = None
     use_ai: bool = True
@@ -35,6 +41,16 @@ def scan(body: ScanIn, principal: Principal = Depends(get_principal)) -> dict:
     if not os.path.isdir(path):
         raise ValidationError(f"path not found: {path}")
     return alerts.run_scan(principal.org_id, path)
+
+
+@router.post("/scan-manifest")
+def scan_manifest(body: ManifestIn, principal: Principal = Depends(get_principal)) -> dict:
+    if Path(body.filename).name not in dependency_scanner._MANIFESTS:
+        raise ValidationError(
+            f"unsupported manifest '{body.filename}'; expected one of "
+            f"{', '.join(dependency_scanner._MANIFESTS)}"
+        )
+    return dependency_scanner.scan_manifest_content(body.filename, body.content)
 
 
 @router.get("/sbom")

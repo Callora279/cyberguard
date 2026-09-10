@@ -150,3 +150,69 @@ input {
 }
 .auth-alt { margin: 16px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
 .auth-foot { font-size: 11px; color: var(--muted); }
+select.auth-input { appearance: none; }
+
+/* ---- Dashboard setup banner ---- */
+.card.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-color: var(--accent);
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.12), var(--panel));
+}
+.card.banner button { white-space: nowrap; }
+
+/* ---- Onboarding wizard ---- */
+.onb-wrap {
+  min-height: 100vh;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+  background:
+    radial-gradient(900px 400px at 50% -10%, rgba(79, 140, 255, 0.14), transparent 60%),
+    var(--bg);
+}
+.onb-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.onb-progress { display: flex; gap: 8px; margin-bottom: 22px; }
+.onb-dot {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.onb-dot span {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-weight: 700; font-size: 12px;
+}
+.onb-dot.active span { border-color: var(--accent); color: var(--accent); }
+.onb-dot.done span { background: var(--accent); color: #fff; border-color: var(--accent); }
+.onb-dot label { text-align: center; }
+.onb-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 26px;
+}
+.onb-card h2 { margin: 0 0 4px; font-size: 20px; }
+.onb-body { margin-top: 18px; }
+.onb-foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 18px; }
+.onb-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 16px;
+  background: var(--panel-2);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+.onb-stat { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+.onb-stat label { font-size: 11px; }
+.onb-idrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.onb-idrow .auth-input { flex: 1; min-width: 130px; }
+.onb-idrow button { align-self: stretch; }

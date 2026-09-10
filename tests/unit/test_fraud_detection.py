@@ -2,18 +2,26 @@ from core.services.ai_fraud_detection import invoice_anomaly, synthetic_identity
 from core.services.ai_fraud_detection.fusion_engine import fusion_analyzer
 
 
-def test_synthetic_identity_flags_disposable_email():
+def test_synthetic_identity_flags_disposable_email(fraud_test_vectors):
     r = synthetic_identity.analyze(
-        {"email": "user8391@mailinator.com", "phone": "0000000000", "full_name": "Test User"}
+        {
+            "email": fraud_test_vectors["disposable_email"],
+            "phone": fraud_test_vectors["placeholder_phone"],
+            "full_name": "Mock User",
+        }
     )
     assert r["synthetic_score"] >= 35
     assert r["verdict"] in ("synthetic", "suspicious")
 
 
-def test_genuine_identity_passes():
+def test_genuine_identity_passes(fraud_test_vectors):
     r = synthetic_identity.analyze(
-        {"email": "priya.sharma@acme.co.uk", "phone": "+447911123456",
-         "full_name": "Priya Sharma", "address": {"line1": "12 King St", "postcode": "EC1A 1BB", "country": "GB"}}
+        {
+            "email": fraud_test_vectors["genuine_email"],
+            "phone": fraud_test_vectors["genuine_phone"],
+            "full_name": fraud_test_vectors["genuine_name"],
+            "address": fraud_test_vectors["genuine_address"],
+        }
     )
     assert r["verdict"] == "genuine"
 
@@ -27,11 +35,25 @@ def test_invoice_anomaly_detects_duplicate_and_round():
     assert any("duplicate" in reason for reason in r["reasons"])
 
 
-def test_fusion_amplifies_multi_signal(org_id):
+def test_fraud_detectors_never_crash_on_none():
+    # Issue 1: None / missing fields must degrade to safe defaults, not raise.
+    assert synthetic_identity.analyze(None)["verdict"] == "genuine"
+    assert invoice_anomaly.analyze(None, None)["anomaly_score"] == 0.0
+    r = fusion_analyzer.analyze_case(None, history=[None, {"id": "x"}])
+    assert r["verdict"] == "allow"
+    assert r["fused_fraud_score"] == 0.0
+    r2 = fusion_analyzer.analyze_case({"identity": None, "context": None, "invoice": None})
+    assert r2["verdict"] == "allow"
+
+
+def test_fusion_amplifies_multi_signal(org_id, fraud_test_vectors):
     case = {
         "case_id": "c1",
         "org_id": org_id,
-        "identity": {"email": "x9999@mailinator.com", "phone": "0000000000"},
+        "identity": {
+            "email": fraud_test_vectors["disposable_email"],
+            "phone": fraud_test_vectors["placeholder_phone"],
+        },
         "transaction": {"amount": 90000, "account_avg": 3000, "new_beneficiary": True, "cross_border": True},
         "context": {"ip_country": "NG", "billing_country": "GB", "device_change": True},
     }
