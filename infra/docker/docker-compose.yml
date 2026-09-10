@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    ports:
+      - "8090:8090"
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql://cyberguard:cyberguard@db:5432/cyberguard
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in your environment or .env}
+      GROQ_MODEL: qwen/qwen3.8-27b
+      CHAKRA_ORG_ID: ${CHAKRA_ORG_ID}
+      INTERNAL_SYNC_SECRET: ${INTERNAL_SYNC_SECRET:?set INTERNAL_SYNC_SECRET}
+      LIVEGUARD_URL: https://liveguard.goiratech.com/api/errors
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+    depends_on:
+      - db
+      - redis
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8090
+    depends_on:
+      - api
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    command: celery -A core.workers.queue.celery_app worker --beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://cyberguard:cyberguard@db:5432/cyberguard
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY}
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cyberguard
+      POSTGRES_PASSWORD: cyberguard
+      POSTGRES_DB: cyberguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - cyberguard_db:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  cyberguard_db:

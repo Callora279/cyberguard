@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cyberguard-api
+  labels: { app: cyberguard, component: api }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: cyberguard, component: api }
+  template:
+    metadata:
+      labels: { app: cyberguard, component: api }
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/goiratech/cyberguard-api:latest
+          ports: [{ containerPort: 8090 }]
+          envFrom:
+            - secretRef: { name: cyberguard-secrets }
+            - configMapRef: { name: cyberguard-config }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8090 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8090 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }

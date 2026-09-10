@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+.cyberguard/
+
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+node_modules/
+.next/
+frontend/mobile/.dart_tool/
+frontend/mobile/build/
+.pytest_cache/
+*.egg-info/
