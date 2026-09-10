@@ -1,5 +1,8 @@
 // Tiny fetch wrapper with bearer-token auth stored in localStorage.
-const BASE = process.env.NEXT_PUBLIC_API_BASE || "";
+//
+// All requests use RELATIVE URLs ("/api/..."). In production nginx proxies
+// /api/ to the backend; in local dev the next.config.js rewrite does the same.
+// No API host is ever hardcoded or baked into the bundle.
 
 export function getToken() {
   if (typeof window === "undefined") return null;
@@ -19,7 +22,7 @@ export async function api(path, { method = "GET", body, auth = true } = {}) {
   const token = auth ? getToken() : null;
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}/api${path}`, {
+  const res = await fetch(`/api${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,

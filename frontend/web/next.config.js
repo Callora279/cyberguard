@@ -1,11 +1,16 @@
 /** @type {import('next').NextConfig} */
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8090";
+
+// The app always calls relative "/api/..." URLs.
+//   - production: nginx proxies /api/ -> backend (nothing to configure here)
+//   - local dev:  this rewrite proxies /api/ -> the backend so `next dev` works
+//                 without nginx. Override the target with API_PROXY_TARGET.
+const DEV_API_TARGET = process.env.API_PROXY_TARGET || "http://localhost:8090";
 
 const nextConfig = {
   reactStrictMode: true,
-  env: { NEXT_PUBLIC_API_BASE: API_BASE },
   async rewrites() {
-    return [{ source: "/api/:path*", destination: `${API_BASE}/api/:path*` }];
+    if (process.env.NODE_ENV !== "development") return [];
+    return [{ source: "/api/:path*", destination: `${DEV_API_TARGET}/api/:path*` }];
   },
 };
 

@@ -15,3 +15,7 @@ frontend/mobile/.dart_tool/
 frontend/mobile/build/
 .pytest_cache/
 *.egg-info/
+
+# Deploy build artifacts
+deploy-*.tar.gz
+*.tar.gz

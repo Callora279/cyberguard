@@ -70,3 +70,83 @@ input {
 }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .muted { color: var(--muted); }
+
+/* ---- Auth pages (login / signup) — CyberGuard dark security theme ---- */
+.auth-wrap {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 40px 16px;
+  background:
+    radial-gradient(1100px 500px at 50% -10%, rgba(79, 140, 255, 0.16), transparent 60%),
+    var(--bg);
+}
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.auth-mark { font-size: 22px; }
+.auth-tagline { color: var(--muted); font-size: 13px; margin: 6px 0 22px; }
+.auth-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin: 14px 0 6px;
+}
+.auth-input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.2);
+}
+.auth-btn {
+  width: 100%;
+  margin-top: 20px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), #2f6bd6);
+}
+.auth-btn:disabled { opacity: 0.6; cursor: default; }
+.auth-error {
+  margin-top: 14px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--crit);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.auth-alt { margin: 16px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
+.auth-foot { font-size: 11px; color: var(--muted); }

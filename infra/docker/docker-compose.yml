@@ -25,11 +25,21 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8090
+    expose:
+      - "3000"
     depends_on:
+      - api
+
+  # Edge reverse proxy: serves the whole app on :3000 and proxies /api -> api:8090.
+  # The web app only ever uses relative URLs, so there is no API host to configure.
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
       - api
 
   worker:

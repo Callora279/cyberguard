@@ -15,9 +15,8 @@ spec:
         - name: web
           image: ghcr.io/goiratech/cyberguard-web:latest
           ports: [{ containerPort: 3000 }]
-          env:
-            - name: NEXT_PUBLIC_API_BASE
-              value: "https://cyberguard.goiratech.com"
+          # No API host env needed: the app uses relative /api URLs and the
+          # ingress routes /api -> cyberguard-api, / -> cyberguard-web.
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { cpu: 300m, memory: 384Mi }
