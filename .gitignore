@@ -19,3 +19,4 @@ frontend/mobile/build/
 # Deploy build artifacts
 deploy-*.tar.gz
 *.tar.gz
+*.tar.gz
