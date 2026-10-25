@@ -15,36 +15,55 @@ from core.workers.queue import celery_app
 
 logger = get_logger("workers.scheduler")
 
-# (task_name, interval_seconds)
+# interval jobs — (task_name -> seconds)
 SCHEDULE = {
-    "recalculate_risk": 900,
-    "rotate_due_credentials": 3600,
-    "refresh_fingerprint": 1800,
+    "recalculate_risk": 21_600,      # every 6 hours   (Phase 2 spec)
+    "check_new_cves": 3_600,          # every 1 hour    (Phase 2 spec)
+    "rotate_due_credentials": 3_600,
+    "refresh_fingerprint": 1_800,
 }
-# tasks that must run once per day at (approximately) midnight UTC
-DAILY_MIDNIGHT = ["daily_identity_sweep"]
+# daily jobs — (task_name -> UTC hour)
+DAILY_AT = {
+    "daily_identity_sweep": 0,        # 00:00 — check expiring credentials
+    "send_daily_digest": 8,           # 08:00 — daily Slack digest
+}
+# weekly jobs — (task_name -> (weekday 0=Mon, UTC hour))
+WEEKLY_AT = {
+    "send_weekly_report": (0, 9),     # Monday 09:00 — weekly security report
+}
 
 if celery_app is not None:  # register with celery beat
     from celery.schedules import crontab
 
     celery_app.conf.beat_schedule = {
-        "recalc-risk-15m": {
+        "recalc-risk-6h": {
             "task": "cyberguard.recalculate_risk",
-            "schedule": 900.0,
-            "args": (),
-            "options": {"expires": 600},
+            "schedule": 21_600.0,
+            "options": {"expires": 3_600},
+        },
+        "check-new-cves-hourly": {
+            "task": "cyberguard.check_new_cves",
+            "schedule": 3_600.0,
         },
         "rotate-credentials-hourly": {
             "task": "cyberguard.rotate_due_credentials",
-            "schedule": 3600.0,
+            "schedule": 3_600.0,
         },
         "refresh-fingerprint-30m": {
             "task": "cyberguard.refresh_fingerprint",
-            "schedule": 1800.0,
+            "schedule": 1_800.0,
         },
         "identity-sweep-daily-midnight": {
             "task": "cyberguard.daily_identity_sweep",
             "schedule": crontab(hour=0, minute=0),
+        },
+        "daily-digest-0800": {
+            "task": "cyberguard.send_daily_digest",
+            "schedule": crontab(hour=8, minute=0),
+        },
+        "weekly-report-monday-0900": {
+            "task": "cyberguard.send_weekly_report",
+            "schedule": crontab(hour=9, minute=0, day_of_week=1),
         },
     }
 
@@ -74,11 +93,16 @@ class ThreadedScheduler:
         while not self._stop.wait(interval):
             self._run_for_all(task_name)
 
-    def _daily_loop(self, task_name: str) -> None:
-        """Fire once per day at ~00:00 UTC."""
+    def _calendar_loop(self, task_name: str, hour: int, weekday: int | None = None) -> None:
+        """Fire once per day (or per week) at ``hour`` UTC."""
         while not self._stop.is_set():
             now = datetime.now(timezone.utc)
-            nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if nxt <= now:
+                nxt += timedelta(days=1)
+            if weekday is not None:
+                while nxt.weekday() != weekday:
+                    nxt += timedelta(days=1)
             if self._stop.wait((nxt - now).total_seconds()):
                 return
             self._run_for_all(task_name)
@@ -88,8 +112,12 @@ class ThreadedScheduler:
             t = threading.Thread(target=self._loop, args=(name, interval), daemon=True)
             t.start()
             self._threads.append(t)
-        for name in DAILY_MIDNIGHT:
-            t = threading.Thread(target=self._daily_loop, args=(name,), daemon=True)
+        for name, hour in DAILY_AT.items():
+            t = threading.Thread(target=self._calendar_loop, args=(name, hour), daemon=True)
+            t.start()
+            self._threads.append(t)
+        for name, (weekday, hour) in WEEKLY_AT.items():
+            t = threading.Thread(target=self._calendar_loop, args=(name, hour, weekday), daemon=True)
             t.start()
             self._threads.append(t)
         logger.info("threaded scheduler started with %d jobs", len(self._threads))

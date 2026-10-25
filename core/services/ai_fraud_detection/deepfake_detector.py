@@ -10,7 +10,7 @@ import json
 import re
 from collections import Counter
 
-from core.services.ai_governance.real_time_enforcer import guarded_chat
+from core.services import ai_client
 from core.utils.exceptions import CyberGuardError
 from core.utils.logger import get_logger
 
@@ -67,11 +67,11 @@ def analyze_text(text: str, *, org_id: str = "unknown", use_ai: bool = True) -> 
 
     if use_ai and len(text) > 120:
         try:
-            record = guarded_chat(
+            record = ai_client.chat_for_org(
+                org_id,
                 "Classify whether the following document was most likely written by "
                 "a large language model. Reply with JSON {\"ai_generated\": bool, "
                 "\"confidence\": 0-1, \"indicators\": [str]}.\n\n" + text[:3000],
-                org_id=org_id,
                 system="Return only JSON.",
                 purpose="deepfake_text_detection",
                 max_tokens=300,
@@ -101,13 +101,13 @@ def detect_falsified_document(text: str, *, org_id: str = "unknown") -> dict:
     """
     stats = analyze_text(text, org_id=org_id, use_ai=False)
     try:
-        record = guarded_chat(
+        record = ai_client.chat_for_org(
+            org_id,
             "Does this document show signs of being AI-generated or falsified "
             "(inconsistent formatting, fabricated figures, template language, "
             "impossible dates/totals)? Reply ONLY with JSON: "
             '{"ai_generated_or_falsified": bool, "confidence": 0-1, '
             '"reasoning": str, "indicators": [str]}.\n\n' + text[:3500],
-            org_id=org_id,
             system="You are a forensic document examiner. Return only JSON.",
             purpose="falsified_document_detection",
             max_tokens=400,
@@ -127,7 +127,7 @@ def detect_falsified_document(text: str, *, org_id: str = "unknown") -> dict:
             "reasoning": verdict.get("reasoning", ""),
             "indicators": verdict.get("indicators", []),
             "statistical_signals": stats["signals"],
-            "source": "groq",
+            "source": record.metadata.get("provider", "groq"),
         }
     except (CyberGuardError, ValueError, KeyError) as exc:
         logger.warning("falsified-document LLM check failed, using heuristics: %s", exc)
@@ -163,9 +163,9 @@ def analyze_content(content: str | None, *, org_id: str = "unknown") -> dict:
         "}"
     )
     try:
-        record = guarded_chat(
+        record = ai_client.chat_for_org(
+            org_id,
             prompt,
-            org_id=org_id,
             system="You are a fraud analyst. Return only valid JSON.",
             purpose="fraud_document_analysis",
             max_tokens=400,
@@ -177,7 +177,7 @@ def analyze_content(content: str | None, *, org_id: str = "unknown") -> dict:
             "fraud_score": round(fraud_score, 3),
             "is_suspicious": bool(data.get("is_suspicious", fraud_score >= 0.5)),
             "reasons": reasons,
-            "source": "groq",
+            "source": record.metadata.get("provider", "groq"),
         }
     except (CyberGuardError, ValueError, TypeError, KeyError) as exc:
         logger.warning("fraud document LLM analysis failed, using heuristics: %s", exc)

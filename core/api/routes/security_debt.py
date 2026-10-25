@@ -10,12 +10,12 @@ from sqlalchemy import select
 from core.api.middleware.auth import Principal, get_principal
 from core.database.db import session_scope
 from core.database.models import SecurityFinding
+from core.database.org_repo import connected_repo
 from core.services.security_debt import remediation_assistant, reporting
 from core.services.security_debt.heatmap_engine import heatmap_builder, heatmap_visualizer
 from core.utils.exceptions import NotFoundError, ValidationError
 
 router = APIRouter()
-_DEFAULT_PATH = os.getenv("SCAN_TARGET_PATH", ".")
 
 
 class ScanIn(BaseModel):
@@ -23,6 +23,10 @@ class ScanIn(BaseModel):
     repo_url: str | None = None
     github_token: str | None = None
     include_dependencies: bool = True
+
+
+class JiraIn(BaseModel):
+    finding_id: str | None = None  # one finding; omit to file the top open findings
 
 
 def _open_findings(org_id: str) -> list[dict]:
@@ -49,14 +53,20 @@ def get_scan(principal: Principal = Depends(get_principal)) -> dict:
 
 @router.post("/scan")
 def run_scan(body: ScanIn, principal: Principal = Depends(get_principal)) -> dict:
-    if body.repo_url:
+    repo_url, token = body.repo_url, body.github_token
+    if not repo_url and not body.path:
+        # No explicit target: use the org's connected repo. Never fall back to
+        # scanning this server's own source tree for an org-scoped scan.
+        repo_url, token = connected_repo(principal.org_id)
+        if not repo_url:
+            raise ValidationError(
+                "no path or repo_url given, and this org has no connected repo configured"
+            )
+    if repo_url:
         return reporting.run_scan_github(
-            principal.org_id,
-            body.repo_url,
-            token=body.github_token,
-            include_dependencies=body.include_dependencies,
+            principal.org_id, repo_url, token=token, include_dependencies=body.include_dependencies
         )
-    path = body.path or _DEFAULT_PATH
+    path = body.path
     if not os.path.isdir(path):
         raise ValidationError(f"path not found: {path}")
     return reporting.run_scan(principal.org_id, path, include_dependencies=body.include_dependencies)
@@ -86,6 +96,23 @@ def remediation(principal: Principal = Depends(get_principal), use_ai: bool = Tr
 
 
 @router.post("/remediation/jira")
-def create_jira(principal: Principal = Depends(get_principal)) -> dict:
+def create_jira(body: JiraIn | None = None, principal: Principal = Depends(get_principal)) -> dict:
+    if body and body.finding_id:
+        from agents.jira.jira_agent import JiraAgent
+
+        agent = JiraAgent(principal.org_id)
+        return {"created": [agent.create_ticket_for_finding(body.finding_id, principal.org_id)]}
     findings = sorted(_open_findings(principal.org_id), key=lambda f: f["priority_score"], reverse=True)[:10]
     return {"created": remediation_assistant.create_jira_tickets(findings, org_id=principal.org_id)}
+
+
+@router.post("/remediation/jira/sync")
+def sync_jira(principal: Principal = Depends(get_principal)) -> dict:
+    from agents.jira.jira_agent import JiraAgent
+
+    agent = JiraAgent(principal.org_id)
+    return {
+        "pulled": agent.sync_remediation_progress(principal.org_id),
+        "closed": agent.close_resolved_tickets(principal.org_id),
+        "sla": agent.sla_report(principal.org_id),
+    }

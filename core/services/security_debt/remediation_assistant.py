@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from core.services.ai_governance.real_time_enforcer import guarded_chat
+from core.services import ai_client
 from core.utils.exceptions import CyberGuardError
 from core.utils.logger import get_logger
 
@@ -80,9 +80,9 @@ def suggest(finding: dict, *, org_id: str = "unknown", use_ai: bool = True) -> d
         f"{json.dumps(finding, default=str)}"
     )
     try:
-        record = guarded_chat(
+        record = ai_client.chat_for_org(
+            org_id,
             prompt,
-            org_id=org_id,
             system="Return only valid JSON.",
             purpose="security_debt_remediation",
             max_tokens=800,
@@ -98,6 +98,8 @@ def suggest(finding: dict, *, org_id: str = "unknown", use_ai: bool = True) -> d
                 ),
                 "references": data.get("references", []),
                 "source": "ai",
+                "provider": record.metadata.get("provider", "groq"),
+                "model": record.model,
             }
         )
     except (CyberGuardError, json.JSONDecodeError, ValueError, KeyError) as exc:

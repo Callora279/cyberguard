@@ -1,6 +1,8 @@
 """Detect identity theft / compromise by comparing live signals to stored DNA."""
 from __future__ import annotations
 
+from statistics import mean, pstdev
+
 from core.services.machine_identity.behaviour_monitor import _load as _load_behaviour
 from core.services.machine_identity.identity_dna import dna_generator, dna_store
 from core.utils.logger import get_logger
@@ -69,3 +71,77 @@ def refresh(identity_id: str, events: list[dict]) -> dict:
     dna = dna_generator.evolve(dna, events)
     dna_store.save(identity_id, dna)
     return dna
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint comparison (Phase 3): compare a live access event against the
+# {normal_hours, normal_endpoints, avg_requests_per_hour, normal_ips}
+# behavioural fingerprint and alert on deviation.
+# ---------------------------------------------------------------------------
+def _hour_is_anomalous(hour: int, histogram: dict) -> bool:
+    """>2 std dev below the identity's typical hourly frequency = unusual hour."""
+    counts = [histogram.get(str(h), 0) for h in range(24)]
+    if sum(counts) < 24:  # not enough history for a meaningful distribution
+        return False
+    mu, sd = mean(counts), pstdev(counts)
+    if sd == 0:
+        return counts[hour] == 0
+    return counts[hour] < mu - 2 * sd
+
+
+def analyze_fingerprint(identity_id: str, *, live_event: dict | None = None) -> dict:
+    """Compare ``live_event`` (``{hour, endpoint, ip, requests_last_hour}``)
+    against the identity's stored behavioural fingerprint.
+
+    Alerts on: access outside normal hours (>2 std dev), a never-seen
+    endpoint, request rate >3x the historical average, or a new IP range.
+    Severity scales with how many/how far the signals deviate.
+    """
+    fp = dna_store.load_fingerprint(identity_id)
+    if not fp or fp.get("sample_count", 0) == 0:
+        return {
+            "identity_id": identity_id, "deviation_score": 0.0, "reasons": [],
+            "severity": "info", "fingerprint_ready": False,
+        }
+
+    reasons: list[str] = []
+    deviation = 0.0
+    live_event = live_event or {}
+
+    hour = live_event.get("hour")
+    if hour is not None and int(hour) not in fp["normal_hours"] and _hour_is_anomalous(int(hour), fp.get("hour_histogram", {})):
+        reasons.append(f"access outside normal hours ({int(hour):02d}:00, >2σ below baseline)")
+        deviation += 30.0
+
+    endpoint = live_event.get("endpoint")
+    if endpoint and endpoint not in fp["normal_endpoints"]:
+        reasons.append(f"new endpoint accessed: {endpoint}")
+        deviation += 25.0
+
+    rate = live_event.get("requests_last_hour")
+    baseline_rate = fp.get("avg_requests_per_hour", 0.0)
+    if rate is not None and baseline_rate > 0 and rate > baseline_rate * 3:
+        reasons.append(f"request rate {rate}/hr is {rate / baseline_rate:.1f}x the {baseline_rate}/hr baseline")
+        deviation += 30.0 * min(2.0, rate / (baseline_rate * 3))
+
+    ip = live_event.get("ip")
+    if ip:
+        prefix = dna_generator.ip_prefix(ip)
+        if prefix not in fp["normal_ips"]:
+            reasons.append(f"access from new IP range {prefix}")
+            deviation += 25.0
+
+    deviation = round(min(100.0, deviation), 1)
+    severity = "critical" if deviation >= 80 else "high" if deviation >= 50 else "medium" if deviation >= 25 else "low"
+
+    result = {
+        "identity_id": identity_id,
+        "deviation_score": deviation,
+        "reasons": reasons,
+        "severity": severity if reasons else "info",
+        "fingerprint_ready": True,
+        "fingerprint_sample_count": fp["sample_count"],
+    }
+    if reasons:
+        logger.warning("identity fingerprint deviation for %s: %s (%s)", identity_id, severity, "; ".join(reasons))
+    return result

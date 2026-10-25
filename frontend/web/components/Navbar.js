@@ -23,6 +23,9 @@ export default function Navbar() {
           {label}
         </Link>
       ))}
+      <a href="https://support.goiratech.com" target="_blank" rel="noopener">
+        🎫 Support
+      </a>
     </nav>
   );
 }

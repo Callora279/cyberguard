@@ -30,9 +30,24 @@ _SECRET_PATTERNS = {
     "github_pat": r"gh[pousr]_[A-Za-z0-9]{30,}",
     "slack_token": r"xox[baprs]-[0-9A-Za-z-]{10,}",
     "private_key": r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
-    "generic_secret": r"(?i)(api[_-]?key|secret|passwd|password|token)\s*[:=]\s*['\"][^'\"]{8,}['\"]",
+    # Captures just the assigned value so entropy is scored on the secret
+    # itself, not the surrounding `keyword: "..."` syntax.
+    "generic_secret": r"(?i)(?:api[_-]?key|secret|passwd|password|token)\s*[:=]\s*['\"]([^'\"]{8,})['\"]",
     "jwt": r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
 }
+
+# Test code routinely assigns literal password/token/key values as fixtures
+# ("password: 'test-password'"). Those aren't secrets to rotate, so findings
+# from the low-confidence generic_secret heuristic are downgraded (not
+# dropped -- a real leaked credential pasted into a test is still worth
+# seeing, just not at critical priority) when the file lives under a test
+# path. Format-specific detectors (AWS keys, PATs, JWTs, ...) stay at full
+# severity everywhere: they're precise enough that a match in a test file is
+# still worth flagging at full severity.
+_TEST_PATH_RE = re.compile(
+    r"(?:^|/)(?:tests?|specs?|__tests__|__mocks__)(?:/|$)|\.(?:test|spec)\.[jt]sx?$",
+    re.IGNORECASE,
+)
 
 _INSECURE_FUNCS = {
     "python": [
@@ -142,23 +157,34 @@ def scan_path(root: str | Path) -> list[Finding]:
         except OSError:
             continue
         rel = str(path.relative_to(root))
+        is_test_file = bool(_TEST_PATH_RE.search(rel))
         lines = text.splitlines()
         debt_hits = 0
 
         for i, line in enumerate(lines, start=1):
             for name, pat in _SECRET_PATTERNS.items():
                 for m in re.finditer(pat, line):
-                    token = m.group(0)
-                    high_entropy = _shannon_entropy(token) > 3.0
+                    value = m.group(1) if m.groups() else m.group(0)
+                    entropy = _shannon_entropy(value)
+                    if name == "generic_secret":
+                        if is_test_file:
+                            severity = "low"
+                        else:
+                            severity = "high" if entropy > 3.5 else "medium"
+                    else:
+                        # Format-specific detectors (AWS keys, PATs, JWTs, ...)
+                        # match a precise shape, so they stay critical
+                        # regardless of location or entropy.
+                        severity = "critical"
                     findings.append(
                         Finding(
                             type="secret",
                             title=f"Hardcoded secret ({name})",
                             file_path=rel,
                             line=i,
-                            severity="critical" if high_entropy or name != "generic_secret" else "high",
+                            severity=severity,
                             snippet=_redact(line),
-                            metadata={"detector": name, "entropy": round(_shannon_entropy(token), 2)},
+                            metadata={"detector": name, "entropy": round(entropy, 2), "test_file": is_test_file},
                         )
                     )
 

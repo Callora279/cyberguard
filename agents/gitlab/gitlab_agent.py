@@ -4,9 +4,11 @@ from __future__ import annotations
 import re
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
+from core.services.iac_scan import reporting as iac_reporting
 from core.services.security_debt import reporting as debt_reporting
 from core.services.security_debt.scanner import _SECRET_PATTERNS
 from core.services.supply_chain import alerts as sc_alerts
@@ -57,13 +59,14 @@ class GitLabAgent:
             self._download_archive(project_id, mr["sha"], Path(tmp))
             debt = debt_reporting.run_scan(org_id, tmp)
             supply = sc_alerts.run_scan(org_id, tmp)
+            iac = iac_reporting.run_scan(org_id, tmp, target=str(project_id))
         self._comment_mr(
             project_id,
             mr_iid,
             f"**CyberGuard AI scan** — {debt['total_findings']} findings, "
             f"{supply['critical_or_high']} high/critical CVEs",
         )
-        return {"debt": debt, "supply": supply}
+        return {"debt": debt, "supply": supply, "iac": iac}
 
     def _update_sbom(self, project_id: str, org_id: str, sha: str | None) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,6 +85,44 @@ class GitLabAgent:
 
         with tarfile.open(archive) as tf:
             tf.extractall(dest)  # noqa: S202
+
+    # GitHub-style names are accepted so callers can stay provider-agnostic.
+    _STATUS_STATES = {
+        "pending": "pending", "running": "running", "success": "success",
+        "failed": "failed", "failure": "failed", "error": "failed", "canceled": "canceled",
+    }
+
+    def post_commit_status(
+        self,
+        project_id: str,
+        sha: str,
+        state: str,
+        description: str,
+        target_url: str | None = None,
+        name: str = "cyberguard/security",
+    ) -> bool:
+        """Set a commit status (pending/success/failed) on ``project_id@sha``.
+
+        Returns True if GitLab accepted it. Never raises on HTTP errors.
+        """
+        gl_state = self._STATUS_STATES.get(state)
+        if gl_state is None:
+            raise ValueError(f"unsupported commit status state {state!r}")
+        if not self.token:
+            logger.info("no token; would set %s status=%s on %s@%s", name, gl_state, project_id, sha)
+            return False
+        params = {"state": gl_state, "name": name, "description": description[:255]}
+        if target_url:
+            params["target_url"] = target_url
+        try:
+            r = self._client.post(
+                f"/projects/{quote(str(project_id), safe='')}/statuses/{sha}", params=params
+            )
+            r.raise_for_status()
+            return True
+        except httpx.HTTPError as exc:
+            logger.warning("failed to set commit status on %s@%s: %s", project_id, sha, exc)
+            return False
 
     def _comment_mr(self, project_id: str, mr_iid: int, body: str) -> None:
         if not self.token:

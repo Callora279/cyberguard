@@ -8,16 +8,18 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from core.api.middleware.auth import Principal, get_principal
+from core.database.org_repo import connected_repo
 from core.services.supply_chain import alerts, dependency_scanner, sbom_parser, vendor_risk
 from core.services.supply_chain.ai_generated_sbom import sbom_generator, sbom_updater
 from core.utils.exceptions import ValidationError
 
 router = APIRouter()
-_DEFAULT_PATH = os.getenv("SCAN_TARGET_PATH", ".")
 
 
 class ScanIn(BaseModel):
     path: str | None = None
+    repo_url: str | None = None
+    github_token: str | None = None
 
 
 class SBOMIn(BaseModel):
@@ -31,13 +33,32 @@ class ManifestIn(BaseModel):
 
 class GenerateIn(BaseModel):
     path: str | None = None
+    repo_url: str | None = None
+    github_token: str | None = None
     use_ai: bool = True
     persist: bool = True
 
 
 @router.post("/scan")
 def scan(body: ScanIn, principal: Principal = Depends(get_principal)) -> dict:
-    path = body.path or _DEFAULT_PATH
+    repo_url, token = body.repo_url, body.github_token
+    if not repo_url and not body.path:
+        # No explicit target: use the org's connected repo. Never fall back to
+        # scanning this server's own source tree for an org-scoped scan.
+        repo_url, token = connected_repo(principal.org_id)
+        if not repo_url:
+            raise ValidationError(
+                "no path or repo_url given, and this org has no connected repo configured"
+            )
+    if repo_url:
+        import tempfile
+
+        from core.utils.github import download_repo, parse_repo_url
+
+        with tempfile.TemporaryDirectory(prefix="cg-supply-") as tmp:
+            root = str(download_repo(parse_repo_url(repo_url), token, Path(tmp)))
+            return alerts.run_scan(principal.org_id, root)
+    path = body.path
     if not os.path.isdir(path):
         raise ValidationError(f"path not found: {path}")
     return alerts.run_scan(principal.org_id, path)
@@ -84,10 +105,30 @@ def vendors(principal: Principal = Depends(get_principal)) -> dict:
 
 @router.post("/generate-sbom")
 def generate_sbom(body: GenerateIn, principal: Principal = Depends(get_principal)) -> dict:
-    path = body.path or _DEFAULT_PATH
-    if not os.path.isdir(path):
-        raise ValidationError(f"path not found: {path}")
-    doc = sbom_generator.generate(path, use_ai=body.use_ai)
-    if body.persist:
-        sbom_updater.update(principal.org_id, path)
+    repo_url, token = body.repo_url, body.github_token
+    if not repo_url and not body.path:
+        # No explicit target: use the org's connected repo. Never fall back to
+        # scanning this server's own source tree for an org-scoped SBOM.
+        repo_url, token = connected_repo(principal.org_id)
+        if not repo_url:
+            raise ValidationError(
+                "no path or repo_url given, and this org has no connected repo configured"
+            )
+    if repo_url:
+        import tempfile
+
+        from core.utils.github import download_repo, parse_repo_url
+
+        with tempfile.TemporaryDirectory(prefix="cg-sbom-") as tmp:
+            path = str(download_repo(parse_repo_url(repo_url), token, Path(tmp)))
+            doc = sbom_generator.generate(path, use_ai=body.use_ai, org_id=principal.org_id)
+            if body.persist:
+                sbom_updater.update(principal.org_id, path)
+    else:
+        path = body.path
+        if not os.path.isdir(path):
+            raise ValidationError(f"path not found: {path}")
+        doc = sbom_generator.generate(path, use_ai=body.use_ai, org_id=principal.org_id)
+        if body.persist:
+            sbom_updater.update(principal.org_id, path)
     return {"sbom": doc, "component_count": len(doc["components"])}

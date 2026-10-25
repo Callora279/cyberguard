@@ -90,5 +90,16 @@ def send_alert(
         if email:
             delivered["email"] = _send_email(email, f"CyberGuard alert: {title}", text)
 
+    # Phase 2: also route through the rich Block Kit / SendGrid dispatcher.
+    try:
+        from core.services.notifications import dispatcher
+
+        dispatcher.route_alert(
+            org_id,
+            {"module": module, "severity": severity, "title": title, "body": body},
+        )
+    except Exception:  # noqa: BLE001 - notifications must never break the caller
+        logger.exception("notification dispatch failed for alert %s", alert_id)
+
     logger.info("alert %s (%s/%s) delivered=%s", alert_id, module, severity, delivered)
     return {"alert_id": alert_id, "delivered": delivered}

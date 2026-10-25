@@ -17,6 +17,7 @@ def _recommendations(breakdown: dict) -> list[dict]:
         "supply_chain": "Upgrade dependencies with high/critical CVEs; regenerate the SBOM.",
         "machine_identity": "Rotate stale credentials and revoke expired identities.",
         "fraud_detection": "Investigate open fraud alerts and confirm/dismiss them.",
+        "iac": "Fix critical/high IaC misconfigurations and rebuild images with patched base layers.",
     }
     out = []
     for module, sc in sorted(breakdown.items(), key=lambda kv: kv[1]):

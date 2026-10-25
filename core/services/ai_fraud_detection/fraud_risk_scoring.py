@@ -13,6 +13,9 @@ from core.services.ai_fraud_detection import (
     invoice_anomaly,
     synthetic_identity,
 )
+from core.utils.logger import get_logger
+
+logger = get_logger("fraud.risk_scoring")
 
 _WEIGHTS = {"transaction": 0.30, "identity": 0.25, "document": 0.25, "behavioural": 0.20}
 
@@ -161,6 +164,8 @@ def score(
                     status="open",
                 )
             )
+    if persist and overall > 70:
+        _notify_fraud(org_id, overall / 100.0, verdict, parts, payload.get("subject"))
     return result
 
 
@@ -228,19 +233,45 @@ def score_content(
         "scored_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    subject = text.strip().splitlines()[0][:120] if text.strip() else ""
     if persist and fraud_score >= 0.4:
         with session_scope() as db:
             db.add(
                 FraudAlert(
                     org_id=org_id,
                     type=doc_type or "document",
-                    subject=text.strip().splitlines()[0][:120] if text.strip() else "",
+                    subject=subject,
                     risk_score=round(fraud_score * 100, 1),  # stored on the 0-100 scale
                     signals=result["breakdown"],
                     status="open",
                 )
             )
+    if persist and fraud_score > 0.7:
+        _notify_fraud(org_id, fraud_score, verdict, reasons, subject)
     return result
+
+
+def _notify_fraud(org_id: str, score_0_1: float, verdict: str, reasons, subject: str | None) -> None:
+    """Fan a high-risk fraud result out to email + Slack (score > 0.7)."""
+    if isinstance(reasons, dict):  # breakdown dict -> flatten to a reason list
+        flat: list[str] = []
+        for part in reasons.values():
+            flat += (part or {}).get("reasons", []) if isinstance(part, dict) else []
+        reasons = flat
+    try:
+        from core.services.notifications import dispatcher
+
+        dispatcher.notify_fraud_alert(
+            org_id,
+            {
+                "fraud_score": round(score_0_1, 3),
+                "verdict": verdict,
+                "reasons": list(reasons or [])[:12],
+                "subject": subject or "document",
+            },
+        )
+    except Exception:  # noqa: BLE001 - notifications must never break scoring
+        logger.exception("fraud notification failed for org=%s", org_id)
 
 
 def list_alerts(org_id: str, *, status: str | None = None) -> list[dict]:

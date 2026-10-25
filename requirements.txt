@@ -8,6 +8,8 @@ httpx==0.28.1
 redis==5.2.1
 celery==5.4.0
 python-multipart==0.0.20
+cryptography==43.0.3
+reportlab==4.2.5
 
 # dev / test
 pytest==8.3.4

@@ -16,7 +16,7 @@ from core.services.machine_identity import (
     identity_registry,
     zero_trust,
 )
-from core.services.machine_identity.identity_dna import dna_analyzer
+from core.services.machine_identity.identity_dna import dna_analyzer, dna_generator
 
 router = APIRouter()
 
@@ -111,9 +111,11 @@ def history(identity_id: str | None = None, principal: Principal = Depends(get_p
 
 @router.post("/access-request")
 def access_request(body: AccessIn, principal: Principal = Depends(get_principal)) -> dict:
-    return zero_trust.request_access(
+    result = zero_trust.request_access(
         zero_trust.AccessRequest(org_id=principal.org_id, **body.model_dump())
     )
+    dna_generator.record_event(body.identity_id, endpoint=body.resource, ip=body.ip)
+    return result
 
 
 @router.get("/{identity_id}/dna")
@@ -122,3 +124,26 @@ def identity_dna(identity_id: str, principal: Principal = Depends(get_principal)
         "analysis": dna_analyzer.analyze(identity_id),
         "behaviour": behaviour_monitor.profile_summary(identity_id),
     }
+
+
+class FingerprintCheckIn(BaseModel):
+    hour: int | None = None
+    endpoint: str | None = None
+    ip: str | None = None
+    requests_last_hour: int | None = None
+
+
+@router.get("/{identity_id}/fingerprint")
+def fingerprint(identity_id: str, days: int = 7, principal: Principal = Depends(get_principal)) -> dict:
+    """The behavioural fingerprint built from the last ``days`` of access
+    events: normal hours, normal endpoints, average hourly rate, normal IPs."""
+    return dna_generator.generate_fingerprint(identity_id, days=days)
+
+
+@router.post("/{identity_id}/fingerprint/check")
+def fingerprint_check(
+    identity_id: str, body: FingerprintCheckIn, principal: Principal = Depends(get_principal)
+) -> dict:
+    """Compare a live access event against the stored fingerprint and score
+    the deviation (off-hours, new endpoint, rate spike, new IP)."""
+    return dna_analyzer.analyze_fingerprint(identity_id, live_event=body.model_dump(exclude_none=True))

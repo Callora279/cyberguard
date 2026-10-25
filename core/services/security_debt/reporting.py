@@ -71,7 +71,29 @@ def run_scan(org_id: str, path: str, *, include_dependencies: bool = True) -> di
                 )
             )
 
+    if crit:
+        _notify_critical(org_id, crit[0])
+
     return summary(org_id, backlog=backlog)
+
+
+def _notify_critical(org_id: str, finding: dict) -> None:
+    try:
+        from core.services.notifications import dispatcher
+
+        dispatcher.notify_critical_finding(
+            org_id,
+            {
+                "title": finding.get("title"),
+                "description": finding.get("title"),
+                "file_path": finding.get("file_path", ""),
+                "line": finding.get("line", 0),
+                "recommendation": finding.get("recommendation")
+                or finding.get("rank_reason", "Review and remediate."),
+            },
+        )
+    except Exception:  # noqa: BLE001 - notifications must never break a scan
+        logger.exception("critical-finding notification failed for org=%s", org_id)
 
 
 def summary(org_id: str, *, backlog: list[dict] | None = None) -> dict:

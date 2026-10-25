@@ -7,6 +7,7 @@ from core.database.db import session_scope
 from core.database.models import RiskScore
 from core.services.ai_fraud_detection import fraud_risk_scoring
 from core.services.ai_governance import monitor as ai_monitor
+from core.services.iac_scan import reporting as iac_reporting
 from core.services.machine_identity import identity_registry
 from core.services.security_debt import reporting as debt_reporting
 from core.services.supply_chain import alerts as sc_alerts
@@ -20,6 +21,9 @@ WEIGHTS = {
     "supply_chain": 0.20,
     "machine_identity": 0.20,
     "fraud_detection": 0.20,
+    # Only counted once the org has an IaC scan; weights are renormalised over
+    # the pillars present, so orgs without one score exactly as before.
+    "iac": 0.20,
 }
 
 
@@ -62,8 +66,9 @@ def _signals(org_id: str) -> dict:
     components = sc_alerts.list_components(org_id)
     reg = identity_registry.list_registry(org_id)
     fraud_open = fraud_risk_scoring.list_alerts(org_id, status="open")
+    iac = iac_reporting.summary(org_id)
 
-    return {
+    signals = {
         "ai_governance": {
             "calls_30d": usage["calls"],
             "blocked_calls": usage["blocked_calls"],
@@ -95,6 +100,14 @@ def _signals(org_id: str) -> dict:
             "high_risk_alerts": sum(1 for a in fraud_open if a["risk_score"] >= 70),
         },
     }
+    if iac:
+        signals["iac"] = {
+            "scans": iac["scans"],
+            "critical": iac["by_severity"].get("critical", 0),
+            "high": iac["by_severity"].get("high", 0),
+            "total_findings": iac["total_findings"],
+        }
+    return signals
 
 
 def calculate(org_id: str, *, persist: bool = True) -> dict:
@@ -105,7 +118,13 @@ def calculate(org_id: str, *, persist: bool = True) -> dict:
         "machine_identity": _machine_identity_score(org_id),
         "fraud_detection": fraud_risk_scoring.module_score(org_id),
     }
-    overall = round(sum(breakdown[k] * w for k, w in WEIGHTS.items()), 2)
+    iac = iac_reporting.summary(org_id)
+    if iac:
+        breakdown["iac"] = iac["module_score"]
+    weights = {k: w for k, w in WEIGHTS.items() if k in breakdown}
+    total_weight = sum(weights.values())
+    weights = {k: round(w / total_weight, 4) for k, w in weights.items()}
+    overall = round(sum(breakdown[k] * w for k, w in weights.items()), 2)
     grade = _grade(overall)
 
     result = {
@@ -114,7 +133,7 @@ def calculate(org_id: str, *, persist: bool = True) -> dict:
         "grade": grade,
         "breakdown": breakdown,
         "signals": _signals(org_id),
-        "weights": WEIGHTS,
+        "weights": weights,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.services.ai_governance.real_time_enforcer import guarded_chat
+from core.services import ai_client
 from core.services.supply_chain import dependency_scanner
 from core.utils.exceptions import CyberGuardError
 from core.utils.logger import get_logger
@@ -44,7 +44,7 @@ def _component(name: str, version: str, ecosystem: str, *, scope: str = "require
     }
 
 
-def _ai_supplement(root: Path, known: set[str]) -> list[dict]:
+def _ai_supplement(root: Path, known: set[str], *, org_id: str = "system") -> list[dict]:
     """Ask the model to spot non-manifest components from key project files."""
     hints = []
     for fname in ("Dockerfile", "Dockerfile.api", "docker-compose.yml", "README.md"):
@@ -61,8 +61,8 @@ def _ai_supplement(root: Path, known: set[str]) -> list[dict]:
         f"Already known: {sorted(known)[:50]}\n\n" + "\n\n".join(hints)
     )
     try:
-        record = guarded_chat(
-            prompt, org_id="system", system="Return only JSON.",
+        record = ai_client.chat_for_org(
+            org_id, prompt, system="Return only JSON.",
             purpose="sbom_generation", max_tokens=800,
         )
         data = json.loads(record.response[record.response.find("{") : record.response.rfind("}") + 1])
@@ -84,7 +84,7 @@ def _ai_supplement(root: Path, known: set[str]) -> list[dict]:
         return []
 
 
-def generate(root: str | Path, *, use_ai: bool = True) -> dict:
+def generate(root: str | Path, *, use_ai: bool = True, org_id: str = "system") -> dict:
     root = Path(root)
     doc = _base_document()
     known: set[str] = set()
@@ -102,7 +102,7 @@ def generate(root: str | Path, *, use_ai: bool = True) -> dict:
             )
 
     if use_ai:
-        doc["components"].extend(_ai_supplement(root, known))
+        doc["components"].extend(_ai_supplement(root, known, org_id=org_id))
 
     doc["metadata"]["component"] = {"type": "application", "name": root.name}
     logger.info("generated SBOM with %d components", len(doc["components"]))

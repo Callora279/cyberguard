@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from core.database.db import session_scope
-from core.database.models import SecurityFinding
+from core.database.models import OrgSettings, SecurityFinding
 from core.utils.config import settings
 from core.utils.logger import get_logger
 
@@ -14,14 +14,54 @@ logger = get_logger("agents.jira")
 
 # SLA per severity (days to resolve)
 _SLA_DAYS = {"critical": 7, "high": 30, "medium": 90, "low": 180}
+_PRIORITY = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
 
 
 class JiraAgent:
-    def __init__(self) -> None:
-        self.base = settings.JIRA_URL.rstrip("/")
-        self.auth = (settings.JIRA_USER, settings.JIRA_TOKEN) if settings.JIRA_USER else None
+    def __init__(self, org_id: str | None = None) -> None:
+        base, user, token, project = (
+            settings.JIRA_URL, settings.JIRA_USER, settings.JIRA_TOKEN, settings.JIRA_PROJECT_KEY
+        )
+        if org_id:  # per-org config overrides the environment
+            with session_scope() as db:
+                row = db.get(OrgSettings, org_id)
+                if row and row.jira_url:
+                    base = row.jira_url
+                    user = row.jira_user or user
+                    token = row.jira_token or token
+                    project = row.jira_project_key or project
+        self.org_id = org_id
+        self.base = (base or "").rstrip("/")
+        self.auth = (user, token) if user and token else None
         self.enabled = bool(self.base and self.auth)
-        self.project_key = "SEC"
+        self.project_key = project or "SEC"
+
+    # ------------------------------------------------------------------ #
+    def create_ticket_for_finding(self, finding_id: str, org_id: str | None = None) -> dict:
+        """Create a Jira Bug for one security finding and link it back."""
+        with session_scope() as db:
+            f = db.get(SecurityFinding, finding_id)
+            if not f:
+                return {"error": "finding not found"}
+            severity = f.severity
+            summary = f"[CyberGuard] {severity.capitalize()}: {f.title}"
+            description = (
+                f"Severity: {severity}\n"
+                f"Type: {f.type}\n"
+                f"Location: {f.file_path}:{f.line}\n"
+                f"Priority score: {f.priority_score}\n\n"
+                f"Remediation:\n{f.remediation or 'Review and remediate.'}"
+            )
+        result = self.create_security_issue(
+            summary=summary,
+            description=description,
+            severity=severity,
+            labels=["security", "cyberguard"],
+        )
+        key = result.get("key")
+        if key and not result.get("error"):
+            self.link_cve_to_finding(finding_id, key)
+        return {**result, "finding_id": finding_id}
 
     def create_security_issue(
         self,
@@ -38,6 +78,7 @@ class JiraAgent:
             "summary": summary[:250],
             "description": description + (f"\n\nCVEs: {', '.join(cve_ids)}" if cve_ids else ""),
             "issuetype": {"name": "Bug"},
+            "priority": {"name": _PRIORITY.get(severity, "Medium")},
             "labels": (labels or []) + [f"severity-{severity}"],
             "duedate": due,
         }
@@ -83,6 +124,50 @@ class JiraAgent:
                 elif now > deadline - timedelta(days=3):
                     at_risk.append(item)
         return {"sla_breaches": breaches, "at_risk": at_risk, "checked_at": now.isoformat()}
+
+    def _transition(self, jira_key: str, target: str = "Done") -> bool:
+        try:
+            r = httpx.get(
+                f"{self.base}/rest/api/2/issue/{jira_key}/transitions", auth=self.auth, timeout=10.0
+            )
+            r.raise_for_status()
+            for tr in r.json().get("transitions", []):
+                if tr["name"].lower() in (target.lower(), "done", "close", "resolve"):
+                    httpx.post(
+                        f"{self.base}/rest/api/2/issue/{jira_key}/transitions",
+                        json={"transition": {"id": tr["id"]}},
+                        auth=self.auth,
+                        timeout=10.0,
+                    )
+                    return True
+        except httpx.HTTPError as exc:
+            logger.warning("Jira transition failed for %s: %s", jira_key, exc)
+        return False
+
+    def close_resolved_tickets(self, org_id: str) -> dict:
+        """Close the Jira ticket for any finding that is fixed / no longer open."""
+        closed = 0
+        with session_scope() as db:
+            rows = db.query(SecurityFinding).filter(
+                SecurityFinding.org_id == org_id,
+                SecurityFinding.jira_key.is_not(None),
+                SecurityFinding.status.in_(("fixed", "accepted")),
+            ).all()
+            keys = [(r.jira_key, r.title) for r in rows]
+        if not self.enabled:
+            return {"closed": 0, "would_close": [k for k, _ in keys], "reason": "jira disabled"}
+        for key, title in keys:
+            try:
+                httpx.post(
+                    f"{self.base}/rest/api/2/issue/{key}/comment",
+                    json={"body": f"Resolved by CyberGuard AI — '{title}' no longer detected."},
+                    auth=self.auth, timeout=10.0,
+                )
+            except httpx.HTTPError:
+                pass
+            if self._transition(key, "Done"):
+                closed += 1
+        return {"closed": closed}
 
     def sync_remediation_progress(self, org_id: str) -> dict:
         """Pull Jira status for linked findings and reflect resolved ones."""

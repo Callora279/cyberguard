@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
 from core.database.db import session_scope
 from core.database.models import Alert, Organisation
+from core.database.org_repo import connected_repo
 from core.services.security_debt import reporting as debt_reporting
 from core.services.supply_chain import alerts as sc_alerts
 from core.services.unified_risk_score import score_calculator
@@ -17,7 +19,6 @@ from core.utils.logger import get_logger
 logger = get_logger("agents.slack")
 
 _SEVERITY_EMOJI = {"critical": ":rotating_light:", "high": ":red_circle:", "medium": ":large_orange_circle:", "low": ":large_yellow_circle:", "info": ":information_source:"}
-_DEFAULT_PATH = os.getenv("SCAN_TARGET_PATH", ".")
 
 
 class SlackBot:
@@ -63,8 +64,21 @@ class SlackBot:
         parts = text.strip().split()
         cmd = parts[0] if parts else "help"
         if cmd == "scan":
-            debt = debt_reporting.run_scan(org_id, _DEFAULT_PATH)
-            supply = sc_alerts.run_scan(org_id, _DEFAULT_PATH)
+            repo_url, token = connected_repo(org_id)
+            if not repo_url:
+                return {
+                    "response_type": "ephemeral",
+                    "text": ":warning: No GitHub repo connected for this workspace. "
+                    "Connect one in the CyberGuard dashboard (Settings → GitHub) first.",
+                }
+            import tempfile
+
+            from core.utils.github import download_repo, parse_repo_url
+
+            with tempfile.TemporaryDirectory(prefix="cg-slack-") as tmp:
+                root = str(download_repo(parse_repo_url(repo_url), token, Path(tmp)))
+                debt = debt_reporting.run_scan(org_id, root)
+                supply = sc_alerts.run_scan(org_id, root)
             return {
                 "response_type": "in_channel",
                 "text": (

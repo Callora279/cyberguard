@@ -25,6 +25,9 @@ try:
         task_track_started=True,
         task_time_limit=600,
         timezone="UTC",
+        # the worker is started with ``-A core.workers.queue.celery_app``; make
+        # sure it registers the tasks (incl. the webhook security gate).
+        imports=("core.workers.background_tasks",),
     )
 except Exception as exc:  # noqa: BLE001
     logger.warning("Celery unavailable (%s); tasks will run synchronously", exc)

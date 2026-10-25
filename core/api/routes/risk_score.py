@@ -60,4 +60,16 @@ def forecast(horizon_days: int = Query(30, ge=1, le=180), principal: Principal =
         "incident_forecast": predictor.predict_incidents(principal.org_id, horizon_days=horizon_days),
         "multi_horizon": risk_forecast.forecast(principal.org_id),
         "internal_trends": trend_analyzer.internal_trends(principal.org_id),
+        # Phase 3: real AI-model 30/60/90 day forecast (name/probability/impact/action per risk)
+        "ai_forecast": predictor.forecast_multi_horizon(principal.org_id),
+    }
+
+
+@router.get("/trend")
+def trend(principal: Principal = Depends(get_principal)) -> dict:
+    """Score-over-time trend + which modules are trending bad + a check for
+    a sharp (>10pt) recent drop."""
+    return {
+        "trend": trend_analyzer.score_trend(principal.org_id),
+        "score_drop": trend_analyzer.check_score_drop(principal.org_id),
     }

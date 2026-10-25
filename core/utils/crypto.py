@@ -10,6 +10,8 @@ import secrets
 import time
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
+
 from core.utils.config import settings
 
 _PBKDF2_ROUNDS = 240_000
@@ -81,3 +83,42 @@ def verify_jwt(token: str) -> dict[str, Any]:
 
 def new_secret(prefix: str = "cg") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
+
+
+def _fernet() -> Fernet:
+    """Stretch ``settings.ENCRYPTION_KEY`` (an arbitrary string) into a valid
+    32-byte urlsafe-base64 Fernet key, so any env var value works — same
+    ergonomics as ``JWT_SECRET``."""
+    key_material = hashlib.sha256(settings.ENCRYPTION_KEY.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key_material))
+
+
+def encrypt_secret(plaintext: str | None) -> str:
+    """Encrypt an at-rest secret (e.g. a client-supplied AI provider API key).
+
+    Returns "" for empty input so callers can store/compare blank values
+    without a round-trip through Fernet.
+    """
+    if not plaintext:
+        return ""
+    return _fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_secret(token: str | None) -> str:
+    """Inverse of :func:`encrypt_secret`. Returns "" if the token is empty,
+    unreadable, or was encrypted under a different ``ENCRYPTION_KEY``."""
+    if not token:
+        return ""
+    try:
+        return _fernet().decrypt(token.encode()).decode()
+    except (InvalidToken, ValueError):
+        return ""
+
+
+def mask_secret(plaintext: str | None, *, keep: int = 4) -> str:
+    """A safe-to-display form: 'sk-…ab12'. Never return the full secret."""
+    if not plaintext:
+        return ""
+    if len(plaintext) <= keep:
+        return "…" + plaintext
+    return f"{plaintext[:2]}…{plaintext[-keep:]}"

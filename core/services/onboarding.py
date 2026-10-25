@@ -44,8 +44,10 @@ def get_or_create_settings(org_id: str) -> dict:
 
 def update_settings(org_id: str, patch: dict) -> dict:
     allowed = {
-        "github_repo_url", "github_token", "website_url",
-        "slack_webhook_url", "report_email", "alert_threshold",
+        "github_repo_url", "github_token", "github_webhook_secret", "website_url",
+        "slack_webhook_url", "slack_daily_digest", "report_email", "alert_threshold",
+        "notification_email", "notify_types", "weekly_digest",
+        "jira_url", "jira_user", "jira_token", "jira_project_key",
     }
     with session_scope() as db:
         row = db.get(OrgSettings, org_id) or OrgSettings(org_id=org_id)
@@ -74,6 +76,8 @@ def _settings_dict(row: OrgSettings, *, reveal: bool = False) -> dict:
         "github": {
             "repo_url": row.github_repo_url,
             "token": row.github_token if reveal else _mask(row.github_token),
+            "webhook_secret": row.github_webhook_secret if reveal else _mask(row.github_webhook_secret, 4),
+            "webhook_url": f"/api/webhooks/github?org_id={row.org_id}",
             "connected": row.github_connected,
             "last_scan_at": row.github_last_scan_at,
         },
@@ -84,8 +88,21 @@ def _settings_dict(row: OrgSettings, *, reveal: bool = False) -> dict:
         },
         "alerts": {
             "slack_webhook_url": row.slack_webhook_url if reveal else _mask(row.slack_webhook_url, 6),
+            "slack_daily_digest": bool(row.slack_daily_digest),
             "report_email": row.report_email,
             "alert_threshold": row.alert_threshold,
+        },
+        "email": {
+            "notification_email": row.notification_email or row.report_email,
+            "notify_types": list(row.notify_types or []),
+            "weekly_digest": bool(row.weekly_digest),
+        },
+        "jira": {
+            "url": row.jira_url,
+            "user": row.jira_user,
+            "token": row.jira_token if reveal else _mask(row.jira_token, 4),
+            "project_key": row.jira_project_key,
+            "connected": bool(row.jira_url and row.jira_user and row.jira_token),
         },
         "updated_at": row.updated_at,
     }

@@ -2,11 +2,51 @@
 from __future__ import annotations
 
 _SCENARIOS = {
+    "sql_injection": {
+        "name": "SQL Injection attempt",
+        "framework": "OWASP A03",
+        "steps": ["sql_injection"],
+        "description": "Probes unauthenticated input-handling endpoints for a path to the data store.",
+    },
+    "xss": {
+        "name": "XSS attack simulation",
+        "framework": "OWASP A03",
+        "steps": ["xss"],
+        "description": "Looks for reflected-parameter sinks on GET endpoints.",
+    },
+    "brute_force": {
+        "name": "Brute force authentication",
+        "framework": "MITRE ATT&CK",
+        "steps": ["brute_force"],
+        "techniques": ["T1110"],
+        "description": "Checks credential-based login flows for missing rate-limiting / lockout.",
+    },
+    "api_key_exposure": {
+        "name": "API key exposure check",
+        "framework": "MITRE ATT&CK",
+        "steps": ["api_key_exposure"],
+        "techniques": ["T1552"],
+        "description": "Checks for unauthenticated config/secret-shaped or unauthenticated API endpoints.",
+    },
+    "csrf": {
+        "name": "CSRF simulation",
+        "framework": "OWASP A01",
+        "steps": ["csrf"],
+        "description": "Identifies state-changing endpoints that need CSRF-token / SameSite-cookie protection.",
+    },
+    "directory_traversal": {
+        "name": "Directory traversal",
+        "framework": "MITRE ATT&CK",
+        "steps": ["directory_traversal"],
+        "techniques": ["T1083"],
+        "description": "Identifies file-serving endpoints that need path canonicalisation / allow-listing.",
+    },
     "owasp_top_10": {
-        "name": "OWASP Top 10 (2021) sweep",
+        "name": "OWASP Top 10 coverage",
         "framework": "OWASP",
-        "steps": ["auth_bypass", "sql_injection", "xss", "supply_chain"],
-        "description": "Exercises A01 (broken access control), A03 (injection), "
+        "steps": ["auth_bypass", "sql_injection", "xss", "csrf", "directory_traversal", "api_key_exposure", "supply_chain"],
+        "description": "Exercises A01 (broken access control), A02 (crypto failures via exposed secrets), "
+        "A03 (injection, XSS), A05 (misconfiguration via directory traversal), "
         "A06/A08 (vulnerable & outdated components / integrity failures).",
     },
     "mitre_initial_access": {

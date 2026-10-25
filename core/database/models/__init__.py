@@ -64,6 +64,7 @@ class OrgSettings(Base):
     # step 1 — GitHub
     github_repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     github_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_webhook_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
     github_connected: Mapped[bool] = mapped_column(Boolean, default=False)
     github_last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -72,14 +73,66 @@ class OrgSettings(Base):
     website_last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     website_last_result: Mapped[dict] = mapped_column(JSON, default=dict)
 
-    # step 4 — alerts
+    # step 4 — alerts / Slack
     slack_webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    slack_daily_digest: Mapped[bool] = mapped_column(Boolean, default=False)
     report_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     alert_threshold: Mapped[str] = mapped_column(String(16), default="high")  # critical|high|medium|low
+
+    # email notifications
+    notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notify_types: Mapped[list] = mapped_column(JSON, default=list)  # [] = all types
+    weekly_digest: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_notified_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Jira integration
+    jira_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jira_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jira_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jira_project_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     org: Mapped[Organisation] = relationship(back_populates="settings")
+
+
+class OrgAISettings(Base):
+    """Per-org bring-your-own-AI-provider configuration.
+
+    ``api_key_encrypted`` holds ciphertext from ``core.utils.crypto.encrypt_secret``
+    — never the plaintext key. A missing row (or a row with no key) means the
+    org uses the system default (Groq, via ``core.utils.config.settings``).
+    """
+
+    __tablename__ = "org_ai_settings"
+
+    org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(16), default="groq")  # groq|openai|anthropic|gemini|custom
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String(128), default="qwen/qwen3.8-27b")
+    base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # custom/self-hosted only
+    max_tokens: Mapped[int] = mapped_column(Integer, default=1024)
+    temperature: Mapped[float] = mapped_column(Float, default=0.2)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class RiskPrediction(Base):
+    """A single AI- or heuristic-generated risk prediction, persisted so the
+    forecast is auditable and doesn't require re-calling the model on every
+    page load."""
+
+    __tablename__ = "risk_predictions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, default=30)
+    risk_name: Mapped[str] = mapped_column(String(255))
+    probability: Mapped[float] = mapped_column(Float, default=0.0)  # 0-100
+    impact: Mapped[str] = mapped_column(Text, default="")
+    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(16), default="heuristic")  # ai|heuristic
+    model: Mapped[str] = mapped_column(String(128), default="")
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
 class ApiToken(Base):
@@ -241,9 +294,90 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
+class GatePolicyModel(Base):
+    """Security-gate policy. ``org_id`` NULL = the global default policy."""
+
+    __tablename__ = "gate_policies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    fail_on: Mapped[str] = mapped_column(String(16), default="critical")  # critical|high|medium|low|info
+    scanners: Mapped[list] = mapped_column(JSON, default=lambda: ["supply_chain", "security_debt", "iac"])
+    fail_open: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class GateRunModel(Base):
+    """One security-gate evaluation triggered by an SCM webhook."""
+
+    __tablename__ = "gate_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    provider: Mapped[str] = mapped_column(String(16))  # github|gitlab
+    repo: Mapped[str] = mapped_column(String(512), default="")
+    ref: Mapped[str] = mapped_column(String(255), default="")
+    commit_sha: Mapped[str] = mapped_column(String(64), default="")
+    event: Mapped[str] = mapped_column(String(32))  # push|pull_request|merge_request
+    decision: Mapped[str] = mapped_column(String(16))  # passed|blocked|error
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class IacScanModel(Base):
+    """One IaC config scan (a source tree) or container image scan."""
+
+    __tablename__ = "iac_scans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    target: Mapped[str] = mapped_column(String(512), default="")  # path / repo or image ref
+    kind: Mapped[str] = mapped_column(String(16), default="config")  # config|image
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)  # by severity
+    findings: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class AuthorizedTargetModel(Base):
+    """A live host an org has attested it is authorised to scan (LiveScan)."""
+
+    __tablename__ = "livescan_authorized_targets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    host: Mapped[str] = mapped_column(String(255), index=True)  # lower-cased hostname, no port
+    scheme: Mapped[str] = mapped_column(String(8), default="https")  # http|https
+    authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    attested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class LiveScanModel(Base):
+    """One read-only LiveScan of an authorised target."""
+
+    __tablename__ = "livescan_scans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    target: Mapped[str] = mapped_column(String(512), default="")
+    fingerprint: Mapped[dict] = mapped_column(JSON, default=dict)
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)  # by severity
+    findings: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
 __all__ = [
+    "AuthorizedTargetModel",
+    "LiveScanModel",
+    "IacScanModel",
+    "GatePolicyModel",
+    "GateRunModel",
     "Organisation",
     "OrgSettings",
+    "OrgAISettings",
+    "RiskPrediction",
     "ApiToken",
     "User",
     "AIInteraction",

@@ -42,6 +42,19 @@ ADDITIVE_COLUMNS: dict[str, dict[str, dict[str, str]]] = {
         },
         "chakra_org_id": {"postgresql": "VARCHAR(64)", "sqlite": "VARCHAR"},
     },
+    "org_settings": {
+        # Phase 2 — notifications / webhooks / integrations
+        "github_webhook_secret": {"postgresql": "VARCHAR(128)", "sqlite": "VARCHAR"},
+        "slack_daily_digest": {"postgresql": "BOOLEAN DEFAULT FALSE", "sqlite": "BOOLEAN DEFAULT 0"},
+        "notification_email": {"postgresql": "VARCHAR(255)", "sqlite": "VARCHAR"},
+        "notify_types": {"postgresql": "JSONB DEFAULT '[]'::jsonb", "sqlite": "TEXT DEFAULT '[]'"},
+        "weekly_digest": {"postgresql": "BOOLEAN DEFAULT TRUE", "sqlite": "BOOLEAN DEFAULT 1"},
+        "last_notified_score": {"postgresql": "DOUBLE PRECISION", "sqlite": "REAL"},
+        "jira_url": {"postgresql": "VARCHAR(255)", "sqlite": "VARCHAR"},
+        "jira_user": {"postgresql": "VARCHAR(255)", "sqlite": "VARCHAR"},
+        "jira_token": {"postgresql": "VARCHAR(255)", "sqlite": "VARCHAR"},
+        "jira_project_key": {"postgresql": "VARCHAR(32)", "sqlite": "VARCHAR"},
+    },
 }
 
 

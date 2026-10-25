@@ -135,6 +135,16 @@ def notify_expiring(org_id: str, *, within_days: int = 30) -> dict:
             body="; ".join(f"{e['name']} in {e['days_left']}d" for e in expiring[:8]),
             context={"expiring": expiring},
         )
+        # Phase 2: dedicated notification for anything expiring within a week
+        urgent = [e for e in expiring if e["days_left"] <= 7]
+        if urgent:
+            try:
+                from core.services.notifications import dispatcher
+
+                for cred in urgent:
+                    dispatcher.notify_credential_expiring(org_id, cred)
+            except Exception:  # noqa: BLE001
+                logger.exception("credential-expiry notification failed for org=%s", org_id)
     return {"within_days": within_days, "expiring": expiring}
 
 

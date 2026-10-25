@@ -12,8 +12,9 @@ import httpx
 from sqlalchemy import select
 
 from core.database.db import session_scope
-from core.database.models import Alert
+from core.database.models import Alert, RiskScore
 from core.utils.logger import get_logger
+from core.utils.notify import send_alert
 from core.utils.timeutil import as_aware
 
 logger = get_logger("predictive_risk.trend_analyzer")
@@ -85,4 +86,65 @@ def internal_trends(org_id: str, *, days: int = 60) -> dict:
         "alerts_by_module": dict(by_module),
         "rising_modules": rising,
         "total_alerts": len(rows),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Score-over-time tracking (Phase 3): trend direction + which modules are
+# trending bad + alert when the overall score drops sharply.
+# ---------------------------------------------------------------------------
+def score_trend(org_id: str, *, days: int = 90) -> dict:
+    """Track the risk score over time and classify the trend direction.
+
+    Thin, UI-friendly wrapper around ``unified_risk_score.score_model`` (the
+    OLS projection already lives there) plus the module-level "trending bad"
+    signal from :func:`internal_trends`.
+    """
+    from core.services.unified_risk_score import score_model
+
+    trend = score_model.trend_analysis(org_id)
+    modules = internal_trends(org_id, days=min(days, 60))
+    return {
+        "org_id": org_id,
+        "points": trend["points"],
+        "direction": trend["prediction"].get("direction", "unknown"),
+        "confidence": trend["prediction"].get("confidence", "low"),
+        "trending_bad_modules": modules["rising_modules"],
+        "anomaly": trend["anomaly"],
+    }
+
+
+def check_score_drop(org_id: str, *, threshold: float = 10.0) -> dict:
+    """Compare the two most recent risk-score readings and raise an alert if
+    the score dropped by more than ``threshold`` points."""
+    with session_scope() as db:
+        rows = db.scalars(
+            select(RiskScore).where(RiskScore.org_id == org_id).order_by(RiskScore.timestamp.desc()).limit(2)
+        ).all()
+
+    if len(rows) < 2:
+        return {"dropped": False, "reason": "insufficient history", "threshold": threshold}
+
+    latest, previous = rows[0], rows[1]
+    drop = round(previous.overall - latest.overall, 1)
+    dropped = drop > threshold
+
+    if dropped:
+        send_alert(
+            org_id,
+            module="predictive_risk",
+            severity="high",
+            title=f"Risk score dropped {drop} points",
+            body=f"Overall risk score fell from {previous.overall:.1f} to {latest.overall:.1f} "
+            f"(alert threshold: {threshold} points).",
+            context={"previous": previous.overall, "current": latest.overall, "drop": drop, "threshold": threshold},
+        )
+        logger.warning("risk score drop for org=%s: %.1f -> %.1f (-%.1f)", org_id, previous.overall, latest.overall, drop)
+
+    return {
+        "dropped": dropped,
+        "current": latest.overall,
+        "previous": previous.overall,
+        "drop": drop,
+        "threshold": threshold,
     }

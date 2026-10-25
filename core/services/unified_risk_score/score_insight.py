@@ -6,7 +6,7 @@ unavailable so the dashboard always has something to show.
 """
 from __future__ import annotations
 
-from core.services.ai_governance.real_time_enforcer import guarded_chat
+from core.services import ai_client
 from core.utils.exceptions import CyberGuardError
 from core.utils.logger import get_logger
 
@@ -34,17 +34,21 @@ def generate(result: dict, *, org_id: str = "unknown") -> dict:
         f"breakdown={result.get('breakdown')}\n"
         f"signals={result.get('signals')}"
     )
+    provider = model = None
     try:
-        summary = guarded_chat(
+        record = ai_client.chat_for_org(
+            org_id,
             prompt,
-            org_id=org_id,
             system="Be concise, factual, executive tone.",
             purpose="risk_score_insight",
             max_tokens=260,
-        ).response.strip()
+        )
+        summary = record.response.strip()
+        provider = record.metadata.get("provider", "groq")
+        model = record.model
         source = "ai"
     except CyberGuardError as exc:
         logger.warning("risk insight LLM call failed: %s", exc)
         summary, source = _fallback(result), "fallback"
 
-    return {"summary": summary, "source": source}
+    return {"summary": summary, "source": source, "provider": provider, "model": model}

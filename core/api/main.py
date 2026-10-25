@@ -13,6 +13,7 @@ from core.api.routes import (
     ai_governance,
     alerts,
     auth,
+    compliance,
     cyber_twin,
     fraud_detection,
     health,
@@ -23,6 +24,7 @@ from core.api.routes import (
     settings as settings_routes,
     supply_chain,
     users,
+    webhooks,
 )
 from core.database.db import init_db
 from core.database.migrate import run_migrations
@@ -93,6 +95,8 @@ app.include_router(risk_score.router, prefix=f"{API}/risk-score", tags=["risk-sc
 app.include_router(cyber_twin.router, prefix=f"{API}/cyber-twin", tags=["cyber-twin"])
 app.include_router(onboarding.router, prefix=f"{API}/onboarding", tags=["onboarding"])
 app.include_router(settings_routes.router, prefix=f"{API}/settings", tags=["settings"])
+app.include_router(compliance.router, prefix=f"{API}/compliance", tags=["compliance"])
+app.include_router(webhooks.router, prefix=f"{API}/webhooks", tags=["webhooks"])
 app.include_router(health.internal_router, prefix="/internal", tags=["internal"])
 
 

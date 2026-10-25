@@ -36,3 +36,30 @@ export async function api(path, { method = "GET", body, auth = true } = {}) {
 
 // SWR fetcher
 export const fetcher = (path) => api(path);
+
+// Authenticated file download (e.g. a compliance PDF) — a plain <a href>
+// can't carry the bearer token, so fetch as a blob and trigger a save.
+export async function downloadFile(path, fallbackName = "download") {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`/api${path}`, { headers });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.message || `${res.status} ${res.statusText}`);
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : fallbackName;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
