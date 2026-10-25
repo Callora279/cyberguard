@@ -7,8 +7,8 @@ psycopg2-binary==2.9.10
 httpx==0.28.1
 redis==5.2.1
 celery==5.4.0
-python-multipart==0.0.20
-cryptography==43.0.3
+python-multipart==0.0.32
+cryptography==50.0.2
 reportlab==4.2.5
 
 # dev / test
