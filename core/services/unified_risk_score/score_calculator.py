@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import select
+
 from core.database.db import session_scope
 from core.database.models import RiskScore
 from core.services.ai_fraud_detection import fraud_risk_scoring
@@ -39,6 +41,31 @@ def _grade(score: float) -> str:
     if score >= 50:
         return "D"
     return "F"
+
+
+_GRADE_ORDER = ["A+", "A", "B", "C", "D", "F"]
+# Headline grade can't be better than this while a module is failing or an
+# open critical finding exists.
+GRADE_CAP = "C"
+MODULE_FLOOR = 40.0
+
+
+def weakest_module(breakdown: dict) -> dict | None:
+    if not breakdown:
+        return None
+    name, score = min(breakdown.items(), key=lambda kv: kv[1])
+    return {"name": name, "score": score}
+
+
+def _cap_grade(grade: str, breakdown: dict, open_critical: int) -> tuple[str, str | None]:
+    reason = None
+    if any(v < MODULE_FLOOR for v in breakdown.values()):
+        reason = f"a module scores below {MODULE_FLOOR:g}"
+    elif open_critical > 0:
+        reason = f"{open_critical} open critical finding{'s' if open_critical != 1 else ''}"
+    if reason and _GRADE_ORDER.index(grade) < _GRADE_ORDER.index(GRADE_CAP):
+        return GRADE_CAP, reason
+    return grade, None
 
 
 def _ai_governance_score(org_id: str) -> float:
@@ -111,9 +138,10 @@ def _signals(org_id: str) -> dict:
 
 
 def calculate(org_id: str, *, persist: bool = True) -> dict:
+    debt = debt_reporting.summary(org_id)
     breakdown = {
         "ai_governance": _ai_governance_score(org_id),
-        "security_debt": debt_reporting.summary(org_id)["module_score"],
+        "security_debt": debt["module_score"],
         "supply_chain": sc_alerts.module_score(sc_alerts.list_components(org_id)),
         "machine_identity": _machine_identity_score(org_id),
         "fraud_detection": fraud_risk_scoring.module_score(org_id),
@@ -125,12 +153,16 @@ def calculate(org_id: str, *, persist: bool = True) -> dict:
     total_weight = sum(weights.values())
     weights = {k: round(w / total_weight, 4) for k, w in weights.items()}
     overall = round(sum(breakdown[k] * w for k, w in weights.items()), 2)
-    grade = _grade(overall)
+    grade, grade_capped_by = _cap_grade(
+        _grade(overall), breakdown, debt["by_severity"].get("critical", 0)
+    )
 
     result = {
         "org_id": org_id,
         "overall": overall,
         "grade": grade,
+        "grade_capped_by": grade_capped_by,
+        "weakest_module": weakest_module(breakdown),
         "breakdown": breakdown,
         "signals": _signals(org_id),
         "weights": weights,
@@ -138,14 +170,29 @@ def calculate(org_id: str, *, persist: bool = True) -> dict:
     }
 
     if persist:
+        # At most one snapshot per UTC day: upsert the latest score into today's row.
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         with session_scope() as db:
-            db.add(
-                RiskScore(
-                    org_id=org_id,
-                    overall=overall,
-                    grade=grade,
-                    breakdown_json=breakdown,
-                )
+            today = db.scalar(
+                select(RiskScore)
+                .where(RiskScore.org_id == org_id, RiskScore.timestamp >= day_start)
+                .order_by(RiskScore.timestamp.desc())
             )
+            if today is None:
+                db.add(
+                    RiskScore(
+                        org_id=org_id,
+                        overall=overall,
+                        grade=grade,
+                        breakdown_json=breakdown,
+                        timestamp=now,
+                    )
+                )
+            else:
+                today.overall = overall
+                today.grade = grade
+                today.breakdown_json = breakdown
+                today.timestamp = now
     logger.info("unified risk for %s: %.1f (%s)", org_id, overall, grade)
     return result

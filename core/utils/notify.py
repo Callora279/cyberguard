@@ -8,9 +8,12 @@ must not break a scan or a scheduled sweep.
 from __future__ import annotations
 
 import smtplib
+from datetime import datetime, timezone
 from email.message import EmailMessage
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from core.database.db import session_scope
 from core.database.models import Alert, OrgSettings
@@ -58,6 +61,65 @@ def _send_email(to_addr: str, subject: str, body: str) -> bool:
         return False
 
 
+def find_open_alert(db: Session, org_id: str, module: str, kind: str) -> Alert | None:
+    """The open (unacknowledged) alert for (org, module, kind), if any."""
+    return db.scalar(
+        select(Alert)
+        .where(
+            Alert.org_id == org_id,
+            Alert.module == module,
+            Alert.kind == kind,
+            Alert.acknowledged.is_(False),
+        )
+        .order_by(Alert.created_at.desc())
+    )
+
+
+def upsert_alert(
+    db: Session,
+    org_id: str,
+    *,
+    module: str,
+    kind: str,
+    severity: str,
+    title: str,
+    body: str = "",
+    context: dict | None = None,
+    count: int = 1,
+) -> tuple[Alert, int | None]:
+    """Update the open alert for (org, module, kind), or insert one.
+
+    Returns ``(alert, previous_count)``; ``previous_count`` is None when the
+    alert is new.
+    """
+    now = datetime.now(timezone.utc)
+    alert = find_open_alert(db, org_id, module, kind)
+    if alert is not None:
+        previous = alert.count
+        alert.severity = severity
+        alert.title = title
+        alert.body = body
+        alert.context = context or {}
+        alert.count = count
+        alert.last_seen = now
+        db.flush()
+        return alert, previous
+    alert = Alert(
+        org_id=org_id,
+        module=module,
+        kind=kind,
+        severity=severity,
+        title=title,
+        body=body,
+        context=context or {},
+        count=count,
+        last_seen=now,
+    )
+    db.add(alert)
+    db.flush()
+    return alert, None
+
+
 def send_alert(
     org_id: str,
     *,
@@ -66,19 +128,30 @@ def send_alert(
     title: str,
     body: str = "",
     context: dict | None = None,
+    kind: str | None = None,
 ) -> dict:
-    """Persist an Alert row and fan out to Slack / email when above threshold."""
+    """Persist an Alert row and fan out to Slack / email when above threshold.
+
+    With ``kind``, the open alert for (org, module, kind) is updated in place
+    instead of inserting a duplicate.
+    """
     with session_scope() as db:
-        alert = Alert(
-            org_id=org_id,
-            module=module,
-            severity=severity,
-            title=title,
-            body=body,
-            context=context or {},
-        )
-        db.add(alert)
-        db.flush()
+        if kind:
+            alert, _ = upsert_alert(
+                db, org_id, module=module, kind=kind, severity=severity,
+                title=title, body=body, context=context,
+            )
+        else:
+            alert = Alert(
+                org_id=org_id,
+                module=module,
+                severity=severity,
+                title=title,
+                body=body,
+                context=context or {},
+            )
+            db.add(alert)
+            db.flush()
         alert_id = alert.id
 
     slack, email, threshold = _channels(org_id)

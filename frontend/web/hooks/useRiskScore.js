@@ -8,6 +8,9 @@ export function useRiskScore() {
   return {
     score: data?.score,
     grade: data?.grade,
+    weakestModule: data?.weakest_module,
+    scanTarget: data?.scan_target,
+    repoConnected: data?.repo_connected,
     breakdown: data?.breakdown || {},
     trend: data?.trend_30d || [],
     forecast: data?.forecast,

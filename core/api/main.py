@@ -28,7 +28,7 @@ from core.api.routes import (
     webhooks,
 )
 from core.database.db import init_db
-from core.database.migrate import run_migrations
+from core.database.migrate import run_migrations, suppress_ignored_findings
 from core.services.ai_governance.real_time_enforcer import install as install_enforcer
 from core.utils.config import settings
 from core.utils.exceptions import CyberGuardError
@@ -42,10 +42,26 @@ async def lifespan(app: FastAPI):
     configure_logging()
     init_db()
     run_migrations()  # patch in any columns missing from an older production DB
+    suppress_ignored_findings()  # idempotent: test/fixture/docs findings -> suppressed
+    _warn_demo_user()
     install_enforcer()  # route all AI calls through governance
     logger.info("%s %s started (env=%s)", settings.APP_NAME, settings.VERSION, settings.ENV)
     yield
     logger.info("shutting down")
+
+
+def _warn_demo_user() -> None:
+    if settings.ENV != "production":
+        return
+    from sqlalchemy import select
+
+    from core.database.db import session_scope
+    from core.database.models import User
+    from core.database.seed import DEMO_EMAIL
+
+    with session_scope() as db:
+        if db.scalar(select(User.id).where(User.email == DEMO_EMAIL)):
+            logger.warning("demo user %s exists in a production database; remove it", DEMO_EMAIL)
 
 
 app = FastAPI(

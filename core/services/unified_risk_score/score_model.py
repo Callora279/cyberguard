@@ -37,17 +37,29 @@ def _ols(y: list[float]) -> tuple[float, float]:
     return slope, intercept
 
 
+MIN_FORECAST_DAYS = 7
+
+
 def predict(org_id: str, *, horizon_days: int = 30) -> dict:
     series = _series(org_id)
     y = [v for _, v in series]
-    if len(y) < 3:
-        return {"prediction": y[-1] if y else None, "confidence": "low", "reason": "insufficient history"}
+    days = len({t.date() for t, _ in series})
+    if days < MIN_FORECAST_DAYS:
+        return {
+            "available": False,
+            "predicted": None,
+            "confidence": "low",
+            "days_of_data": days,
+            "reason": f"Forecast available after {MIN_FORECAST_DAYS} days of data",
+        }
     slope, intercept = _ols(y)
     projected = intercept + slope * (len(y) - 1 + horizon_days)
     projected = max(0.0, min(100.0, projected))
     residuals = [v - (intercept + slope * i) for i, v in enumerate(y)]
     rmse = (mean(r ** 2 for r in residuals)) ** 0.5
     return {
+        "available": True,
+        "days_of_data": days,
         "current": round(y[-1], 2),
         "predicted": round(projected, 2),
         "horizon_days": horizon_days,

@@ -19,7 +19,7 @@ export default function PredictiveRisk() {
   }));
 
   const trendChartData = (trendData?.trend?.points || []).map((p) => ({
-    date: p.t.slice(0, 10),
+    date: new Date(p.t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
     score: Math.round(p.score),
   }));
 

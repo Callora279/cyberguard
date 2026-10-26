@@ -211,7 +211,7 @@ class SecurityFinding(Base):
     file_path: Mapped[str] = mapped_column(String(512), default="")
     line: Mapped[int] = mapped_column(Integer, default=0)
     severity: Mapped[str] = mapped_column(String(16), default="medium")
-    status: Mapped[str] = mapped_column(String(16), default="open")  # open|triaged|fixed|accepted
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|triaged|fixed|accepted|suppressed
     priority_score: Mapped[float] = mapped_column(Float, default=0.0)
     exploitability: Mapped[float] = mapped_column(Float, default=0.0)
     business_impact: Mapped[float] = mapped_column(Float, default=0.0)
@@ -289,6 +289,10 @@ class Alert(Base):
     title: Mapped[str] = mapped_column(String(255))
     body: Mapped[str] = mapped_column(Text, default="")
     context: Mapped[dict] = mapped_column(JSON, default=dict)
+    # dedupe key: at most one open (unacknowledged) alert per (org, module, kind)
+    kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     acknowledged_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

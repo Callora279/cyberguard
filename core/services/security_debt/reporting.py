@@ -8,9 +8,10 @@ from pathlib import Path
 from sqlalchemy import select
 
 from core.database.db import session_scope
-from core.database.models import Alert, SecurityFinding
+from core.database.models import SecurityFinding
 from core.services.security_debt import prioritizer, scanner
 from core.utils.logger import get_logger
+from core.utils.notify import find_open_alert, upsert_alert
 
 logger = get_logger("security_debt.reporting")
 
@@ -59,19 +60,29 @@ def run_scan(org_id: str, path: str, *, include_dependencies: bool = True) -> di
                 )
             )
         crit = [i for i in backlog if i["severity"] == "critical"]
+        notify = False
         if crit:
-            db.add(
-                Alert(
-                    org_id=org_id,
-                    module="security_debt",
-                    severity="critical",
-                    title=f"{len(crit)} critical security findings",
-                    body="; ".join(i["title"] for i in crit[:5]),
-                    context={"count": len(crit)},
-                )
+            n = len(crit)
+            existing = find_open_alert(db, org_id, "security_debt", "critical_findings")
+            previous = existing.count if existing else None
+            title = f"{n} critical findings"
+            if previous is not None and previous != n:
+                title += f" (was {previous})"
+            upsert_alert(
+                db,
+                org_id,
+                module="security_debt",
+                kind="critical_findings",
+                severity="critical",
+                title=title,
+                body="; ".join(i["title"] for i in crit[:5]),
+                context={"count": n},
+                count=n,
             )
+            # Re-notify only for a new alert or a changed count, not every rescan.
+            notify = previous != n
 
-    if crit:
+    if notify:
         _notify_critical(org_id, crit[0])
 
     return summary(org_id, backlog=backlog)

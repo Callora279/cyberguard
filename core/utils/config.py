@@ -76,6 +76,26 @@ class Settings:
     GITHUB_WEBHOOK_SECRET: str = os.getenv("GITHUB_WEBHOOK_SECRET", "")
     GITLAB_WEBHOOK_TOKEN: str = os.getenv("GITLAB_WEBHOOK_TOKEN", "")
 
+    # Security-debt scanner ignore list (comma-separated). Entries ending in "/"
+    # match a directory name anywhere in the path; others are filename globs.
+    SCAN_IGNORE_PATHS: list[str] = [
+        p.strip()
+        for p in os.getenv(
+            "SCAN_IGNORE_PATHS",
+            "test/,tests/,__tests__/,fixtures/,mocks/,docs/,"
+            "*.test.*,*.spec.*,*.example,.env.example",
+        ).split(",")
+        if p.strip()
+    ]
+    # Secret values containing one of these words are treated as placeholders.
+    SCAN_PLACEHOLDER_VALUES: list[str] = [
+        p.strip().lower()
+        for p in os.getenv(
+            "SCAN_PLACEHOLDER_VALUES", "test,changeme,example,dummy,xxx,fake"
+        ).split(",")
+        if p.strip()
+    ]
+
     # External vuln feeds
     OSV_API_URL: str = os.getenv("OSV_API_URL", "https://api.osv.dev/v1/query")
     NVD_API_URL: str = os.getenv(

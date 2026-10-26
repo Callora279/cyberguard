@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from core.database.db import session_scope
-from core.database.models import Alert, RiskScore
+from core.database.models import Alert, OrgSettings, RiskScore
 from core.services.unified_risk_score import score_calculator, score_model
 
 
@@ -41,13 +41,25 @@ def build(org_id: str, *, recalculate: bool = True) -> dict:
             .limit(10)
         ).all()
         alert_feed = [
-            {"id": a.id, "module": a.module, "severity": a.severity, "title": a.title, "created_at": a.created_at}
+            {
+                "id": a.id, "module": a.module, "severity": a.severity, "title": a.title,
+                "count": a.count, "last_seen": a.last_seen, "created_at": a.created_at,
+            }
             for a in open_alerts
         ]
+        org_settings = db.get(OrgSettings, org_id)
+        repo_url = org_settings.github_repo_url if org_settings else None
     return {
         "org_id": org_id,
         "score": current["overall"],
         "grade": current["grade"],
+        "grade_capped_by": current.get("grade_capped_by"),
+        "weakest_module": current.get("weakest_module")
+        or score_calculator.weakest_module(current["breakdown"]),
+        # Only a connected repo is a real target; otherwise the scan is of "."
+        # (this server's own tree) and the dashboard shows the self-scan banner.
+        "scan_target": repo_url or ".",
+        "repo_connected": bool(repo_url),
         "breakdown": current["breakdown"],
         "trend_30d": history,
         "forecast": score_model.predict(org_id),
@@ -75,4 +87,10 @@ def history_series(org_id: str, *, days: int = 30) -> list[dict]:
             .where(RiskScore.org_id == org_id, RiskScore.timestamp >= since)
             .order_by(RiskScore.timestamp)
         ).all()
-    return [{"t": r.timestamp.isoformat(), "score": r.overall, "grade": r.grade} for r in rows]
+    # One point per day (the latest), so older multi-snapshot days don't repeat
+    # an x-axis label.
+    by_day = {r.timestamp.date(): r for r in rows}
+    return [
+        {"t": r.timestamp.isoformat(), "score": r.overall, "grade": r.grade}
+        for r in by_day.values()
+    ]

@@ -32,7 +32,7 @@ uvicorn core.api.main:app --reload --port 8090
 ```
 
 - API docs: http://localhost:8090/docs
-- Demo login: `admin@cyberguard.ai` / `cyberguard-demo`
+- Demo login: `admin@cyberguard.ai` / the `DEMO_ADMIN_PASSWORD` env var (if unset, `seed` generates one and prints it once)
 
 ### Web
 

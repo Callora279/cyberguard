@@ -11,12 +11,21 @@ import { useRiskScore } from "../hooks/useRiskScore";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { api } from "../lib/api";
 
+// "Oct 26, 14:05" — date plus time so same-day points never share a label.
+const fmtTick = (t) =>
+  new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
 export default function Dashboard() {
-  const { score, grade, breakdown, trend, forecast, recommendations, error, refresh } = useRiskScore();
+  const {
+    score, grade, breakdown, trend, forecast, recommendations, weakestModule,
+    scanTarget, repoConnected, error, refresh,
+  } = useRiskScore();
   const { completed, currentStep, steps, scanCount, openFindings, refresh: refreshOnb } = useOnboarding();
   const [scanning, setScanning] = useState(false);
 
   const noScans = scanCount === 0;
+  // Before the dashboard loads, scanTarget is undefined; don't flash the banner.
+  const selfScan = scanTarget !== undefined && (scanTarget === "." || !repoConnected);
 
   async function runFirstScan() {
     setScanning(true);
@@ -60,14 +69,37 @@ export default function Dashboard() {
 
       {error && <div className="card" style={{ color: "var(--crit)" }}>API error: {String(error.message)}</div>}
 
+      {selfScan && (
+        <div className="card banner">
+          <div>
+            <strong>Self-scan of CyberGuard (no repository connected)</strong>
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              These results describe CyberGuard itself, not your code. Connect a repository to get your score.
+            </p>
+          </div>
+          <Link href="/onboarding"><button>Connect a repository</button></Link>
+        </div>
+      )}
+
+      {scanTarget !== undefined && (
+        <p className="muted" style={{ margin: 0 }}>
+          Scan target: <strong style={{ color: "var(--text)" }}>{scanTarget}</strong>
+        </p>
+      )}
+
       <div className="grid cards">
-        <RiskScoreCard score={score} grade={grade} forecast={forecast} />
+        <RiskScoreCard
+          score={score} grade={grade} forecast={forecast}
+          weakestModule={weakestModule} selfScan={selfScan}
+        />
         <ComplianceStatus breakdown={breakdown} />
       </div>
 
       <p className="muted" style={{ margin: "-8px 0 0" }}>
-        Your security score: <strong style={{ color: "var(--text)" }}>{score ?? "—"}/100</strong>
-        {" · "}{openFindings} open finding{openFindings === 1 ? "" : "s"} to fix
+        {!selfScan && (
+          <>Your security score: <strong style={{ color: "var(--text)" }}>{score ?? "—"}/100</strong>{" · "}</>
+        )}
+        {openFindings} open finding{openFindings === 1 ? "" : "s"} to fix
         {" · "}{scanCount} scan{scanCount === 1 ? "" : "s"} run
       </p>
 
@@ -78,7 +110,7 @@ export default function Dashboard() {
         ) : (
           <div style={{ width: "100%", height: 240 }}>
             <ResponsiveContainer>
-              <LineChart data={trend.map((p) => ({ ...p, t: p.t.slice(5, 10) }))}>
+              <LineChart data={trend.map((p) => ({ ...p, t: fmtTick(p.t) }))}>
                 <CartesianGrid stroke="#232b3a" />
                 <XAxis dataKey="t" stroke="#8b94a7" />
                 <YAxis domain={[0, 100]} stroke="#8b94a7" />

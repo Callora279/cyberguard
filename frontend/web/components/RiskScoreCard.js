@@ -1,6 +1,14 @@
 const GRADE_COLOR = { "A+": "#22c55e", A: "#22c55e", B: "#84cc16", C: "#eab308", D: "#f97316", F: "#ef4444" };
 
-export default function RiskScoreCard({ score, grade, forecast }) {
+export default function RiskScoreCard({ score, grade, forecast, weakestModule, selfScan }) {
+  if (selfScan) {
+    return (
+      <div className="card" style={{ gridColumn: "span 2" }}>
+        <h3>Unified Risk Score</h3>
+        <p className="muted">No score yet — connect a repository to scan your own code.</p>
+      </div>
+    );
+  }
   return (
     <div className="card" style={{ gridColumn: "span 2" }}>
       <h3>Unified Risk Score</h3>
@@ -11,11 +19,20 @@ export default function RiskScoreCard({ score, grade, forecast }) {
         <span className="badge" style={{ background: "rgba(79,140,255,.15)", color: "#4f8cff" }}>
           Grade {grade ?? "?"}
         </span>
+        {weakestModule && (
+          <span className="muted">
+            weakest module: {weakestModule.name.replace(/_/g, " ")} ({weakestModule.score})
+          </span>
+        )}
       </div>
-      {forecast?.predicted != null && (
+      {forecast?.available && forecast.predicted != null ? (
         <p className="muted" style={{ marginTop: 10 }}>
           {forecast.horizon_days}-day forecast: <strong>{forecast.predicted}</strong> ({forecast.direction})
         </p>
+      ) : (
+        forecast && (
+          <p className="muted" style={{ marginTop: 10 }}>Forecast available after 7 days of data</p>
+        )
       )}
     </div>
   );

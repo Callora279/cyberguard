@@ -22,6 +22,7 @@ os.environ.setdefault("GITHUB_TOKEN", "ghp_MOCK_github_token_for_tests_only")
 os.environ.setdefault("CHAKRA_ORG_ID", "mock-chakra-org-id")
 os.environ.setdefault("INTERNAL_SYNC_SECRET", "mock-internal-sync-secret")
 os.environ.setdefault("JWT_SECRET", "mock-jwt-secret")
+os.environ.setdefault("DEMO_ADMIN_PASSWORD", "demo-password-mock")
 _db_fd, _db_path = tempfile.mkstemp(suffix=".db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 os.environ["CYBERGUARD_STATE_DIR"] = tempfile.mkdtemp()
@@ -77,10 +78,10 @@ def client(_bootstrap_db):
 
 @pytest.fixture(scope="session")
 def demo_credentials() -> dict:
-    """The seeded demo login — pulled from the seed module, not hardcoded."""
-    from core.database.seed import DEMO_EMAIL, DEMO_PASSWORD
+    """The seeded demo login — email from the seed module, password from the env."""
+    from core.database.seed import DEMO_EMAIL
 
-    return {"email": DEMO_EMAIL, "password": DEMO_PASSWORD}
+    return {"email": DEMO_EMAIL, "password": os.environ["DEMO_ADMIN_PASSWORD"]}
 
 
 @pytest.fixture(scope="session")

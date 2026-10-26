@@ -9,11 +9,13 @@ Detects:
 """
 from __future__ import annotations
 
+import fnmatch
 import math
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from core.utils.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("security_debt.scanner")
@@ -48,6 +50,35 @@ _TEST_PATH_RE = re.compile(
     r"(?:^|/)(?:tests?|specs?|__tests__|__mocks__)(?:/|$)|\.(?:test|spec)\.[jt]sx?$",
     re.IGNORECASE,
 )
+
+
+
+def is_ignored_path(rel_path: str, patterns: list[str] | None = None) -> bool:
+    """True when a repo-relative path matches the configured ignore list.
+
+    Entries ending in "/" match a directory name anywhere in the path; other
+    entries are globs matched against the filename.
+    """
+    patterns = settings.SCAN_IGNORE_PATHS if patterns is None else patterns
+    parts = rel_path.replace("\\", "/").split("/")
+    dirs, name = parts[:-1], parts[-1]
+    for pat in patterns:
+        if pat.endswith("/"):
+            if pat.rstrip("/") in dirs:
+                return True
+        elif fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+
+def _is_placeholder(value: str) -> bool:
+    """Obvious placeholder values ("changeme", "test-password", "xxxxxxxx", ...)."""
+    words = settings.SCAN_PLACEHOLDER_VALUES
+    if not words:
+        return False
+    alt = "|".join(re.escape(w) for w in words)
+    return bool(re.search(rf"(?:^|[^a-z])(?:{alt})", value.lower()))
+
 
 _INSECURE_FUNCS = {
     "python": [
@@ -157,6 +188,8 @@ def scan_path(root: str | Path) -> list[Finding]:
         except OSError:
             continue
         rel = str(path.relative_to(root))
+        if is_ignored_path(rel):
+            continue
         is_test_file = bool(_TEST_PATH_RE.search(rel))
         lines = text.splitlines()
         debt_hits = 0
@@ -165,6 +198,8 @@ def scan_path(root: str | Path) -> list[Finding]:
             for name, pat in _SECRET_PATTERNS.items():
                 for m in re.finditer(pat, line):
                     value = m.group(1) if m.groups() else m.group(0)
+                    if _is_placeholder(value):
+                        continue
                     entropy = _shannon_entropy(value)
                     if name == "generic_secret":
                         if is_test_file:
@@ -272,6 +307,8 @@ def scan_dependencies(root: str | Path) -> list[Finding]:
 
     out: list[Finding] = []
     for vuln in dependency_scanner.scan_path(root):
+        if is_ignored_path(vuln.get("manifest", "")):
+            continue
         out.append(
             Finding(
                 type="dependency",

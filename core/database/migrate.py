@@ -55,6 +55,12 @@ ADDITIVE_COLUMNS: dict[str, dict[str, dict[str, str]]] = {
         "jira_token": {"postgresql": "VARCHAR(255)", "sqlite": "VARCHAR"},
         "jira_project_key": {"postgresql": "VARCHAR(32)", "sqlite": "VARCHAR"},
     },
+    "alerts": {
+        # alert dedupe: one open alert per (org, module, kind)
+        "kind": {"postgresql": "VARCHAR(64)", "sqlite": "VARCHAR"},
+        "count": {"postgresql": "INTEGER", "sqlite": "INTEGER"},
+        "last_seen": {"postgresql": "TIMESTAMP WITH TIME ZONE", "sqlite": "DATETIME"},
+    },
 }
 
 
@@ -110,10 +116,33 @@ def run_migrations() -> list[str]:
     return applied
 
 
+def suppress_ignored_findings() -> int:
+    """One-time cleanup: open findings under ignored paths become "suppressed".
+
+    Rows are kept (not deleted) but leave every "open" count, score and alert.
+    Idempotent: once suppressed, a row no longer matches ``status == 'open'``.
+    """
+    from core.database.db import session_scope
+    from core.database.models import SecurityFinding
+    from core.services.security_debt.scanner import is_ignored_path
+
+    with session_scope() as db:
+        rows = db.query(SecurityFinding).filter(SecurityFinding.status == "open").all()
+        hits = [r for r in rows if r.file_path and is_ignored_path(r.file_path)]
+        for r in hits:
+            r.status = "suppressed"
+    if hits:
+        logger.info("migrate: suppressed %d finding(s) under ignored paths", len(hits))
+    return len(hits)
+
+
 def main() -> None:
     """CLI entrypoint: ``python -m core.database.migrate``."""
     init_db()  # make sure the baseline tables exist first
     applied = run_migrations()
+    suppressed = suppress_ignored_findings()
+    if suppressed:
+        print(f"Suppressed {suppressed} finding(s) under ignored paths.")
     if applied:
         print(f"Applied {len(applied)} column migration(s):")
         for change in applied:
