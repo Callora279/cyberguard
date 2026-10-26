@@ -17,6 +17,7 @@ from core.api.routes import (
     cyber_twin,
     fraud_detection,
     health,
+    livescan,
     machine_identity,
     onboarding,
     risk_score,
@@ -97,6 +98,7 @@ app.include_router(onboarding.router, prefix=f"{API}/onboarding", tags=["onboard
 app.include_router(settings_routes.router, prefix=f"{API}/settings", tags=["settings"])
 app.include_router(compliance.router, prefix=f"{API}/compliance", tags=["compliance"])
 app.include_router(webhooks.router, prefix=f"{API}/webhooks", tags=["webhooks"])
+app.include_router(livescan.router, prefix=f"{API}/livescan", tags=["livescan"])
 app.include_router(health.internal_router, prefix="/internal", tags=["internal"])
 
 
